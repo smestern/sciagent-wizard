@@ -19,18 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation fonts-dejavu-core \
     # Networking (for healthchecks)
     curl \
+    # Git (needed to pip-install sciagent from GitHub)
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # ── Install Python dependencies ──────────────────────────────────────
-# NOTE: When sciagent-wizard moves to its own repo, change the
-# COPY/install lines to:
-#   COPY pyproject.toml README.md ./
-#   COPY src/ src/
-#   RUN pip install --no-cache-dir "." && ...
-# The wizard's pyproject.toml declares sciagent>=0.2.0 as a dependency,
-# so the core framework is pulled from PyPI automatically.
+# sciagent is not on PyPI — install it from GitHub first.
+RUN pip install --no-cache-dir "sciagent[web,cli] @ git+https://github.com/smestern/sciagent.git"
+
 COPY pyproject.toml README.md ./
 COPY src/ src/
 COPY templates/ templates/

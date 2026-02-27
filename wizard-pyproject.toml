@@ -32,8 +32,8 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core framework (loose pin — wizard tracks latest compatible version)
-    "sciagent>=0.2.0",
+    # Core framework — installed from GitHub (not on PyPI)
+    "sciagent @ git+https://github.com/smestern/sciagent.git",
     # Wizard-specific deps
     "httpx>=0.25",
     "python-dotenv>=1.0",
