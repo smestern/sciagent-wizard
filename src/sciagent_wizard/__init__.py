@@ -25,7 +25,47 @@ Usage::
     # sciagent-wizard --public
 """
 
-from sciagent_wizard.agent import create_wizard, WIZARD_CONFIG
+
+def _lazy_import():
+    """Deferred import to avoid circular dependency with sciagent plugin discovery."""
+    from sciagent_wizard.agent import create_wizard as _cw, WIZARD_CONFIG as _wc
+    return _cw, _wc
+
+
+def create_wizard(*args, **kwargs):
+    """Create a wizard agent instance (lazy-loaded)."""
+    _cw, _ = _lazy_import()
+    return _cw(*args, **kwargs)
+
+
+def _get_wizard_config():
+    _, _wc = _lazy_import()
+    return _wc
+
+
+class _LazyConfig:
+    """Descriptor that proxies attribute access to the real WIZARD_CONFIG."""
+    _real = None
+
+    def _load(self):
+        if self._real is None:
+            _, self._real = _lazy_import()
+        return self._real
+
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+
+    def __setattr__(self, name, value):
+        if name == '_real':
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._load(), name, value)
+
+    def __repr__(self):
+        return repr(self._load())
+
+
+WIZARD_CONFIG = _LazyConfig()
 
 __all__ = [
     "create_wizard",
@@ -74,14 +114,17 @@ def _register_web(app, *, public_agent_factory=None, **_kwargs):
 
         configure_app_sessions(app)
         if is_oauth_configured() or os.environ.get("SCIAGENT_INVITE_CODE"):
-            app.register_blueprint(create_auth_blueprint())
+            auth_bp = create_auth_blueprint()
+            if auth_bp.name not in app.blueprints:
+                app.register_blueprint(auth_bp)
     except ImportError:
         pass
 
     # Main wizard blueprint
     try:
         from sciagent_wizard.web import wizard_bp
-        app.register_blueprint(wizard_bp)
+        if wizard_bp.name not in app.blueprints:
+            app.register_blueprint(wizard_bp)
     except ImportError:
         pass
 
@@ -89,7 +132,8 @@ def _register_web(app, *, public_agent_factory=None, **_kwargs):
     if public_agent_factory is not None:
         try:
             from sciagent_wizard.public import public_bp
-            app.register_blueprint(public_bp)
+            if public_bp.name not in app.blueprints:
+                app.register_blueprint(public_bp)
         except ImportError:
             pass
 
@@ -107,7 +151,8 @@ def _register_web(app, *, public_agent_factory=None, **_kwargs):
     # Docs ingestor blueprint
     try:
         from sciagent_wizard.docs_ingestor.web import ingestor_bp
-        app.register_blueprint(ingestor_bp)
+        if ingestor_bp.name not in app.blueprints:
+            app.register_blueprint(ingestor_bp)
     except ImportError:
         pass
 
@@ -139,8 +184,8 @@ def _register_cli(typer_app):
             help="Rigor enforcement level: strict, standard, relaxed, or bypass.",
         ),
     ):
-        """🧙 Launch the self-assembly wizard to build a domain-specific agent."""
-        from sciagent_wizard import create_wizard, WIZARD_CONFIG
+        """Launch the self-assembly wizard to build a domain-specific agent."""
+        from sciagent_wizard.agent import create_wizard, WIZARD_CONFIG
         from sciagent_wizard.models import OutputMode
 
         try:
@@ -167,7 +212,7 @@ def _register_cli(typer_app):
             from rich.panel import Panel
 
             Console().print(Panel(
-                "[bold]🧙 SciAgent Self-Assembly Wizard[/bold]\n"
+                "[bold]SciAgent Self-Assembly Wizard[/bold]\n"
                 f"[dim]Open http://localhost:{port}/wizard in your browser[/dim]\n"
                 f"[dim]Output mode: {mode.value}[/dim]\n"
                 f"[dim]Rigor level: {_rigor.value}[/dim]",
@@ -264,7 +309,7 @@ def main():
 
         if public_mode:
             console.print(Panel(
-                "[bold]🧙 SciAgent Public Builder[/bold]\n"
+                "[bold]SciAgent Public Builder[/bold]\n"
                 f"[dim]Open http://localhost:{port}/public in your browser[/dim]\n"
                 f"[dim]Guided mode • No freeform chat • Rate limited[/dim]",
                 expand=False,
@@ -275,7 +320,7 @@ def main():
             )
         else:
             console.print(Panel(
-                "[bold]\U0001f9d9 SciAgent Self-Assembly Wizard[/bold]\n"
+                "[bold]SciAgent Self-Assembly Wizard[/bold]\n"
                 f"[dim]Open http://localhost:{port}/wizard in your browser[/dim]\n"
                 f"[dim]Output mode: {output_mode.value}[/dim]",
                 expand=False,
