@@ -26,12 +26,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # ── Install Python dependencies ──────────────────────────────────────
-# sciagent is not on PyPI — install it from GitHub first.
-RUN pip install --no-cache-dir "sciagent[web,cli] @ git+https://github.com/smestern/sciagent.git"
+# sciagent is not on PyPI — clone from GitHub, install, and grab templates.
+RUN git clone --depth 1 https://github.com/smestern/sciagent.git /tmp/sciagent && \
+    pip install --no-cache-dir "/tmp/sciagent[web,cli]" && \
+    cp -r /tmp/sciagent/templates /app/templates && \
+    rm -rf /tmp/sciagent
 
 COPY pyproject.toml README.md ./
 COPY src/ src/
-COPY templates/ templates/
 
 RUN pip install --no-cache-dir ".[wizard]" && \
     pip install --no-cache-dir playwright && \
