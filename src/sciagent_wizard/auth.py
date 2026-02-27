@@ -68,6 +68,29 @@ def _is_invite_authenticated() -> bool:
         return False
     return session.get("invite_authenticated", False)
 
+
+def _try_invite_from_url() -> bool:
+    """Check for an ``invite`` query-parameter and authenticate if it matches.
+
+    This allows sharing links like ``/public/?invite=CODE`` so that
+    recipients are authenticated automatically without manual entry.
+    Returns True if the invite code was valid and the session is now
+    authenticated, False otherwise.
+    """
+    invite_code = os.environ.get(_INVITE_CODE_VAR)
+    if not invite_code:
+        return False
+    submitted = request.args.get("invite", "").strip()
+    if not submitted:
+        return False
+    if hmac.compare_digest(submitted, invite_code):
+        session["invite_authenticated"] = True
+        session.permanent = True
+        logger.info("Invite-code authentication via URL parameter")
+        return True
+    logger.warning("Invalid invite code in URL parameter")
+    return False
+
 # ── Environment-variable helpers ────────────────────────────────────────
 
 _GITHUB_OAUTH_CLIENT_ID = "GITHUB_OAUTH_CLIENT_ID"
@@ -287,14 +310,27 @@ def create_auth_blueprint() -> Blueprint:
 
     @auth_bp.route("/invite")
     async def invite_form():
-        """Show a simple invite-code entry form."""
+        """Show a simple invite-code entry form.
+
+        Supports ``?code=CODE`` to auto-authenticate without typing.
+        """
         invite_code = os.environ.get(_INVITE_CODE_VAR)
         if not invite_code:
             return jsonify({"error": "Invite codes are not enabled."}), 404
 
+        return_to = request.args.get("return_to", "/public/")
+
         # If already authenticated via invite, redirect
         if _is_invite_authenticated():
-            return redirect(request.args.get("return_to", "/public/"))
+            return redirect(return_to)
+
+        # Auto-verify if ?code=CODE is in the URL
+        url_code = request.args.get("code", "").strip()
+        if url_code and hmac.compare_digest(url_code, invite_code):
+            session["invite_authenticated"] = True
+            session.permanent = True
+            logger.info("Invite-code authentication via URL ?code= parameter")
+            return redirect(return_to)
 
         return await render_template_string(
             _INVITE_PAGE_HTML,
@@ -403,6 +439,10 @@ def require_auth(f):
         if _is_invite_authenticated():
             return await f(*args, **kwargs)
 
+        # Auto-authenticate via ?invite=CODE in the URL
+        if _try_invite_from_url():
+            return await f(*args, **kwargs)
+
         if is_oauth_configured():
             # Check if user has a token and if it's still valid
             has_valid_token = session.get("github_token") and await _validate_token_if_needed()
@@ -443,6 +483,10 @@ def require_auth_ws(f):
     async def wrapper(*args, **kwargs):
         # Allow invite-code authenticated sessions through
         if _is_invite_authenticated():
+            return await f(*args, **kwargs)
+
+        # Auto-authenticate via ?invite=CODE in the URL (WebSocket upgrade)
+        if _try_invite_from_url():
             return await f(*args, **kwargs)
 
         if is_oauth_configured() and not session.get("github_token"):

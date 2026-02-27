@@ -1,2 +1,3 @@
 
 /src/sciagent_wizard.egg-info/*
+src/sciagent_wizard/__pycache__/*
