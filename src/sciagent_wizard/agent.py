@@ -23,6 +23,32 @@ from . import tools as wizard_tools
 
 logger = logging.getLogger(__name__)
 
+PUBLIC_MODE_EXCLUDED_TOOLS = [ #stop users and/or AI from calling these tools in public/guided mode, which is more restrictive
+    "apply_patch",
+    "create_and_run_task",
+    "create_new_jupyter_notebook",
+    "create_new_workspace",
+    "edit_notebook_file",
+    "install_extension",
+    "install_python_packages",
+    "kill_terminal",
+    "mcp_playwright_browser_evaluate",
+    "mcp_playwright_browser_file_upload",
+    "mcp_playwright_browser_run_code",
+    "restart_notebook_kernel",
+    "run_in_terminal",
+    "run_notebook_cell",
+    "run_vscode_command",
+    "search_subagent",
+    "terminal_last_command",
+    "terminal_selection",
+    "await_terminal",
+    "get_terminal_output",
+    "excute_python_code",
+    "excute_code"
+
+]
+
 # ── Wizard configuration ───────────────────────────────────────────────
 
 WIZARD_CONFIG = AgentConfig(
@@ -101,6 +127,11 @@ class WizardAgent(BaseScientificAgent):
     def model(self, value: str) -> None:
         """Update the model in wizard state."""
         self._wizard_state.model = value
+
+    def _get_excluded_tools(self) -> Optional[List[str]]:
+        if self._guided_mode:
+            return PUBLIC_MODE_EXCLUDED_TOOLS
+        return None
 
     # ── Tool registration ───────────────────────────────────────────
 
