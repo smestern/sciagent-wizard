@@ -32,8 +32,8 @@ classifiers = [
 ]
 
 dependencies = [
-    # Core framework — installed from GitHub (not on PyPI)
-    "sciagent @ git+https://github.com/smestern/sciagent.git",
+    # Core framework — when installed as sciagent[wizard], the local install satisfies this.
+    "sciagent>=0.3.0",
     # Wizard-specific deps
     "httpx>=0.25",
     "python-dotenv>=1.0",
@@ -53,6 +53,9 @@ dev = [
     "pytest-cov>=4.0",
     "black>=23.0",
     "ruff>=0.1",
+]
+standalone = [
+    "sciagent @ git+https://github.com/smestern/sciagent.git",
 ]
 
 [project.scripts]
