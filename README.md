@@ -2,6 +2,8 @@
 
 **Self-assembly wizard for building domain-specific [SciAgent](https://github.com/smestern/sciagent) agents.**
 
+()
+
 Describe your research domain in plain language, upload example data, and the wizard automatically discovers relevant scientific packages, fetches their documentation, and generates a ready-to-use agent project — no programming required.
 
 ---

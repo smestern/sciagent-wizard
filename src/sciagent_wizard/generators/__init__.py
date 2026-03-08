@@ -13,7 +13,7 @@ from typing import Optional
 from sciagent_wizard.models import OutputMode, WizardState
 
 from .fullstack import generate_project as generate_fullstack_project
-from .copilot import generate_copilot_project
+from .copilot import generate_copilot_project, generate_copilot_plugin
 from .markdown import generate_markdown_project
 from .docs_gen import write_docs
 from sciagent_wizard.rendering import (
@@ -45,6 +45,9 @@ def generate_project(
         project_dir.mkdir(parents=True, exist_ok=True)
         return generate_copilot_project(state, project_dir)
 
+    if mode == OutputMode.COPILOT_PLUGIN:
+        return generate_copilot_plugin(state, output_dir=output_dir)
+
     if mode == OutputMode.MARKDOWN:
         base = Path(output_dir) if output_dir else Path.cwd()
         slug = state.agent_name.replace(" ", "_").replace("-", "_")
@@ -60,6 +63,7 @@ __all__ = [
     "generate_project",
     "generate_fullstack_project",
     "generate_copilot_project",
+    "generate_copilot_plugin",
     "generate_markdown_project",
     "write_docs",
     "render_docs",

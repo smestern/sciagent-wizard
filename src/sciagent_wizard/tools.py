@@ -326,6 +326,20 @@ def tool_generate(
             ),
             "docs": "Package documentation is in docs/",
         }
+    elif mode == OutputMode.COPILOT_PLUGIN:
+        instructions = {
+            "install": (
+                f'Add to VS Code settings.json:\n'
+                f'  "chat.plugins.paths": {{\n'
+                f'      "{project_path.as_posix()}": true\n'
+                f'  }}'
+            ),
+            "usage": (
+                f"Restart VS Code, then invoke @{state.agent_name} in Copilot chat. "
+                f"Skills are available as slash commands."
+            ),
+            "docs": "Package documentation is in docs/",
+        }
     elif mode == OutputMode.MARKDOWN:
         instructions = {
             "usage": (
@@ -468,7 +482,7 @@ def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = Fals
         output_mode = OutputMode(mode)
     except ValueError:
         return json.dumps({
-            "error": f"Invalid mode '{mode}'. Must be one of: fullstack, copilot_agent, markdown"
+            "error": f"Invalid mode '{mode}'. Must be one of: fullstack, copilot_agent, copilot_plugin, markdown"
         })
 
     # Enforce restriction in guided/public mode
@@ -491,6 +505,11 @@ def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = Fals
             "Configuration files for VS Code GitHub Copilot custom agent "
             "(.agent.md) and Claude Code sub-agent (.md). Includes shared "
             "instructions and package documentation."
+        ),
+        OutputMode.COPILOT_PLUGIN: (
+            "Full VS Code Copilot plugin with plugin.json manifest, compiled "
+            "agents with inlined expertise, skills as SKILL.md files, and "
+            "package documentation. Install via chat.plugins.paths."
         ),
         OutputMode.MARKDOWN: (
             "Platform-agnostic Markdown files (system prompt, tools reference, "

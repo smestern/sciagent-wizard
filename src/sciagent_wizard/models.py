@@ -17,6 +17,7 @@ class OutputMode(str, Enum):
 
     FULLSTACK = "fullstack"          # Full Python submodule (current mode)
     COPILOT_AGENT = "copilot_agent"  # VS Code .agent.md + Claude .md configs
+    COPILOT_PLUGIN = "copilot_plugin"  # VS Code Copilot plugin (plugin.json, agents/, skills/)
     MARKDOWN = "markdown"            # Platform-agnostic markdown specification
 
 
