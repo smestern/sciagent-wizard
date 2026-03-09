@@ -12,9 +12,10 @@ Produces a directory with:
 Or, in plugin mode:
 
     .github/plugin/plugin.json          VS Code plugin manifest
-    agents/<name>.md                    Compiled agent(s) with inlined instructions
+    agents/<prefix>-<name>.md           Compiled agents from templates
     skills/<name>/SKILL.md              Domain skills
-    docs/                               Package documentation
+    templates/                           Rendered template docs
+    docs/                                Package documentation
     README.md
 """
 
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -29,11 +31,66 @@ from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
 from sciagent_wizard.rendering import (
+    _TEMPLATES_DIR,
+    _build_context,
+    _build_repeat_context,
+    _humanize_unfilled_placeholders,
     render_docs as render_doc_templates,
     render_docs_with_domain_links,
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Template source paths ──────────────────────────────────────────────
+
+_AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "agents"
+_INSTRUCTIONS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "instructions"
+_PROMPTS_SRC = _TEMPLATES_DIR / "prompts"
+
+# ── Regex patterns ─────────────────────────────────────────────────────
+
+_REPLACE_PATTERN = re.compile(
+    r"<!--\s*REPLACE:\s*([a-zA-Z0-9_]+)\s*[—-].*?-->",
+    flags=re.DOTALL,
+)
+
+# Reference to shared rigor instructions that each agent links to.
+_RIGOR_LINK_PATTERN = re.compile(
+    r"Follow the \[shared scientific rigor principles\]"
+    r"\([^)]*sciagent-rigor\.instructions\.md\)\.",
+)
+
+# Which prompt modules to append to each agent.
+_AGENT_PROMPT_MAP: dict[str, list[str]] = {
+    "coordinator": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "analysis-planner": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "data-qc": [
+        "scientific_rigor.md",
+        "communication_style.md",
+        "code_execution.md",
+        "incremental_execution.md",
+        "clarification.md",
+    ],
+    "rigor-reviewer": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "report-writer": [
+        "scientific_rigor.md",
+        "communication_style.md",
+        "reproducible_script.md",
+        "clarification.md",
+    ],
+    "code-reviewer": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "docs-ingestor": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "coder": [
+        "scientific_rigor.md",
+        "communication_style.md",
+        "code_execution.md",
+        "incremental_execution.md",
+        "reproducible_script.md",
+        "clarification.md",
+    ],
+}
+
+_BUILTIN_AGENTS = {"agent", "ask"}
 
 
 def generate_copilot_project(
@@ -120,6 +177,199 @@ If a rigor warning is raised by `execute_code` (indicated by
 3. If confirmed, re-call `execute_code` with `confirmed: true`.
 4. Never silently bypass or suppress rigor warnings.
 """
+
+
+# ── Template compilation helpers ───────────────────────────────────────
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """Split YAML frontmatter from markdown body.
+
+    Returns ``(frontmatter_text_without_delimiters, body)``.
+    If no frontmatter, returns ``("", text)``.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return "", text
+    end = stripped.find("---", 3)
+    if end == -1:
+        return "", text
+    fm = stripped[3:end].strip()
+    body = stripped[end + 3:].lstrip("\n")
+    return fm, body
+
+
+def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
+    """Substitute ``<!-- REPLACE: key — … -->`` placeholders in *text*."""
+    if not replacements:
+        return text
+
+    def _sub(m: re.Match[str]) -> str:
+        return replacements.get(m.group(1), m.group(0))
+
+    return _REPLACE_PATTERN.sub(_sub, text)
+
+
+def _prefixed(name: str, prefix: str) -> str:
+    """Return *name* with *prefix*- prepended (or unchanged if prefix is empty)."""
+    return f"{prefix}-{name}" if prefix else name
+
+
+def _compile_agents_from_templates(
+    state: WizardState,
+    output_dir: Path,
+    domain_expertise: str,
+) -> list[str]:
+    """Compile agent ``.agent.md`` templates into plugin ``agents/<name>.md`` files.
+
+    For each template in ``_AGENTS_SRC``:
+
+    1. Apply ``<!-- REPLACE: … -->`` substitutions from wizard state.
+    2. Inline rigor instructions (replace link → full content).
+    3. Append prompt modules per ``_AGENT_PROMPT_MAP``.
+    4. Prefix ``name:`` and handoff ``agent:`` references with
+       ``state.agent_name``.
+    5. Append domain expertise text.
+    6. Humanize remaining unfilled placeholders.
+    7. Write to ``output_dir/agents/<prefixed_name>.md``.
+
+    Returns:
+        Sorted list of prefixed agent stems (e.g. ``["myagent-coordinator", …]``).
+    """
+    name_prefix = state.agent_name
+
+    # Build replacement context from wizard state
+    context = _build_context(state)
+    repeat_ctx = _build_repeat_context(state)
+    # Flatten repeat context into replacements (repeat blocks handled separately)
+    replacements: dict[str, str] = dict(context)
+
+    # Load rigor instructions for inlining
+    rigor_text = ""
+    rigor_path = _INSTRUCTIONS_SRC / "sciagent-rigor.instructions.md"
+    if rigor_path.exists():
+        rigor_text = rigor_path.read_text(encoding="utf-8").strip()
+
+    # Pre-load prompt modules
+    prompt_cache: dict[str, str] = {}
+    if _PROMPTS_SRC.exists():
+        for p in _PROMPTS_SRC.iterdir():
+            if p.suffix == ".md" and p.is_file():
+                content = p.read_text(encoding="utf-8").strip()
+                _, body = _split_frontmatter(content)
+                prompt_cache[p.name] = body.strip() if body.strip() else content
+
+    agents_dir = output_dir / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    agent_names: list[str] = []
+
+    if not _AGENTS_SRC.exists():
+        logger.warning("Agent templates not found: %s", _AGENTS_SRC)
+        return agent_names
+
+    for src_file in sorted(_AGENTS_SRC.glob("*.agent.md")):
+        raw = src_file.read_text(encoding="utf-8")
+
+        # 1. Apply placeholder substitutions
+        raw = _apply_replacements(raw, replacements)
+
+        fm_text, body = _split_frontmatter(raw)
+
+        # 2. Inline rigor instructions (replace link with full content)
+        if rigor_text:
+            replacement_block = (
+                "### Shared Scientific Rigor Principles\n\n" + rigor_text
+            )
+            body = _RIGOR_LINK_PATTERN.sub(replacement_block, body)
+
+        # 3. Append prompt modules
+        agent_stem = src_file.stem.replace(".agent", "")
+        if agent_stem in _AGENT_PROMPT_MAP:
+            appendices: list[str] = []
+            for prompt_name in _AGENT_PROMPT_MAP[agent_stem]:
+                if prompt_name in prompt_cache:
+                    appendices.append(prompt_cache[prompt_name])
+            if appendices:
+                body = (
+                    body.rstrip()
+                    + "\n\n---\n\n"
+                    + "\n\n---\n\n".join(appendices)
+                    + "\n"
+                )
+
+        # 4. Append domain expertise
+        if domain_expertise:
+            body = (
+                body.rstrip()
+                + "\n\n---\n\n"
+                + "## Domain Expertise\n\n"
+                + domain_expertise
+                + "\n"
+            )
+
+        # 5. Name prefixing — update frontmatter name
+        prefixed_stem = _prefixed(agent_stem, name_prefix)
+        fm_text = re.sub(
+            r"^(name:\s*).+$",
+            rf"\g<1>{prefixed_stem}",
+            fm_text,
+            flags=re.MULTILINE,
+        )
+
+        # 6. Prefix agent references in handoffs
+        if name_prefix:
+            fm_text = re.sub(
+                r"^(\s*agent:\s*)(.+)$",
+                lambda m: (
+                    f"{m.group(1)}{m.group(2).strip()}"
+                    if m.group(2).strip() in _BUILTIN_AGENTS
+                    else f"{m.group(1)}{_prefixed(m.group(2).strip(), name_prefix)}"
+                ),
+                fm_text,
+                flags=re.MULTILINE,
+            )
+
+        # 7. Humanize remaining unfilled placeholders
+        body = _humanize_unfilled_placeholders(body)
+
+        # Reassemble and write
+        output_content = f"---\n{fm_text}\n---\n\n{body}"
+        dest = agents_dir / f"{prefixed_stem}.md"
+        dest.write_text(output_content, encoding="utf-8")
+        agent_names.append(prefixed_stem)
+        logger.debug("Compiled agent template %s → %s", src_file.name, dest)
+
+    logger.info("Compiled %d agent templates", len(agent_names))
+    return agent_names
+
+
+def _copy_template_docs(
+    state: WizardState,
+    output_dir: Path,
+) -> list[Path]:
+    """Render and copy template documentation files into ``output_dir/templates/``.
+
+    Includes operations.md, workflows.md, tools.md, library_api.md, skills.md
+    and prompt modules — all with wizard-state substitutions applied.
+    """
+    templates_dest = output_dir / "templates"
+    written = render_docs_with_domain_links(state, templates_dest)
+
+    # Copy prompt modules
+    if _PROMPTS_SRC.exists():
+        prompts_dest = templates_dest / "prompts"
+        prompts_dest.mkdir(parents=True, exist_ok=True)
+        context = _build_context(state)
+        for p in sorted(_PROMPTS_SRC.iterdir()):
+            if p.suffix == ".md" and p.is_file():
+                content = p.read_text(encoding="utf-8")
+                content = _apply_replacements(content, context)
+                content = _humanize_unfilled_placeholders(content)
+                dest = prompts_dest / p.name
+                dest.write_text(content, encoding="utf-8")
+                written.append(dest)
+
+    return written
 
 
 def _vscode_agent_md(state: WizardState, instructions: str) -> str:
@@ -261,12 +511,17 @@ def generate_copilot_plugin(
 ) -> Path:
     """Generate a VS Code Copilot agent plugin project.
 
+    Compiles all agent ``.agent.md`` templates from the bundled template
+    directory, applying wizard-state substitutions, rigor inlining, prompt
+    module appending, name prefixing, and domain expertise injection.
+
     Produces the plugin directory format that VS Code can discover via
     ``chat.plugins.paths``:
 
     - ``.github/plugin/plugin.json`` — plugin manifest
-    - ``agents/<name>.md`` — one compiled agent with inlined domain expertise
+    - ``agents/<prefix>-<name>.md`` — compiled agents from templates
     - ``skills/<name>/SKILL.md`` — domain-specific skills
+    - ``templates/`` — rendered template docs (operations, workflows, …)
     - ``docs/`` — package documentation
     - ``README.md``
 
@@ -291,15 +546,16 @@ def generate_copilot_plugin(
     if docs_ref:
         full_instructions += "\n\n" + docs_ref
 
-    # ── Build the main agent ────────────────────────────────────────
-    agent_names = [state.agent_name]
-    agent_content = _plugin_agent_md(state, full_instructions)
-    agent_path = project_dir / "agents" / f"{state.agent_name}.md"
-    agent_path.parent.mkdir(parents=True, exist_ok=True)
-    agent_path.write_text(agent_content, encoding="utf-8")
+    # ── Compile agents from templates ───────────────────────────────
+    agent_names = _compile_agents_from_templates(
+        state, project_dir, full_instructions
+    )
 
     # ── Build skills ────────────────────────────────────────────────
     skill_names = _build_plugin_skills(state, project_dir, full_instructions)
+
+    # ── Template docs (operations.md, workflows.md, etc.) ──────────
+    _copy_template_docs(state, project_dir)
 
     # ── plugin.json ─────────────────────────────────────────────────
     _write_plugin_json(state, project_dir, agent_names, skill_names)
@@ -319,48 +575,6 @@ def generate_copilot_plugin(
     state.project_dir = str(project_dir)
     logger.info("Copilot plugin generated: %s", project_dir)
     return project_dir
-
-
-# ── Plugin agent .md ───────────────────────────────────────────────────
-
-
-def _plugin_agent_md(state: WizardState, instructions: str) -> str:
-    """Generate a compiled plugin agent (agents/<name>.md) with inlined expertise."""
-    tools = [
-        "vscode",
-        "vscode/askQuestions",
-        "read",
-        "editFiles",
-        "terminal",
-        "search",
-        "web/fetch",
-    ]
-    tools_yaml = "\n".join(f"  - {t}" for t in tools)
-
-    handoffs_yaml = ""
-    if state.agent_name:
-        handoffs_yaml = f"""handoffs:
-  - label: "Plan Analysis"
-    agent: {state.agent_name}-planner
-    prompt: "Create an analysis plan for the data using the available domain packages."
-    send: false
-  - label: "Review Results"
-    agent: {state.agent_name}-reviewer
-    prompt: "Review the analysis results and check for any issues."
-    send: false"""
-
-    frontmatter = f"""---
-name: {state.agent_name}
-description: >-
-  {state.agent_description}
-argument-hint: Describe your research task and data.
-tools:
-{tools_yaml}
-{handoffs_yaml}
----"""
-
-    body = instructions + "\n\n" + _RIGOR_GUARDRAIL_INSTRUCTIONS + "\n\n"
-    return f"{frontmatter}\n\n{body}\n"
 
 
 # ── Plugin skills ──────────────────────────────────────────────────────
@@ -546,7 +760,9 @@ def _write_plugin_json(
         "author": {"name": "SciAgent Wizard"},
         "license": "MIT",
         "keywords": _derive_keywords(state),
-        "agents": ["./agents"],
+        "agents": [
+            f"./agents/{name}.md" for name in agent_names
+        ],
         "skills": [f"./skills/{name}" for name in skill_names],
     }
 
@@ -583,7 +799,7 @@ def _plugin_readme(
 ) -> str:
     """Generate README.md for the plugin project."""
     agent_table = "\n".join(
-        f"| {name} | `@{name}` |" for name in agent_names
+        f"| `@{name}` | Compiled from template with domain expertise |" for name in agent_names
     )
     skill_table = "\n".join(
         f"| {name} | `/{name}` |" for name in skill_names
@@ -593,10 +809,14 @@ def _plugin_readme(
         for p in state.confirmed_packages
     )
 
+    n_agents = len(agent_names)
+    n_skills = len(skill_names)
+
     return f"""\
 # {state.agent_display_name} — Copilot Plugin
 
-{state.agent_description}
+> **{n_agents} specialized agents** and **{n_skills} skills** for
+> {state.agent_description}
 
 > Auto-generated by the **sciagent self-assembly wizard**.
 
@@ -615,8 +835,8 @@ Add this plugin directory to your VS Code settings:
 
 ## Agents
 
-| Agent | Invocation |
-|-------|------------|
+| Agent | Description |
+|-------|-------------|
 {agent_table}
 
 ## Skills
@@ -631,11 +851,21 @@ Add this plugin directory to your VS Code settings:
 
 ## What's Included
 
-- **Compiled agent** with inlined domain expertise, scientific rigor principles,
-  and handoff suggestions for planning and review workflows.
+- **{n_agents} compiled agents** from SciAgent templates — coordinator, coder,
+  analysis-planner, data-qc, rigor-reviewer, report-writer, code-reviewer,
+  docs-ingestor, and domain-assembler — each with inlined rigor instructions,
+  appended prompt modules, and domain expertise.
 - **Skills** for scientific rigor enforcement, domain-specific knowledge, and
   per-package API reference.
+- **Template docs** in `templates/` — rendered operations, workflows, tools,
+  library API, and skills guides with domain-specific content.
 - **Package documentation** in `docs/` for each confirmed domain library.
+
+## Template Documents
+
+Rendered template guides with domain-specific content are in `templates/`.
+These include operations.md, workflows.md, tools.md, library_api.md, and
+skills.md.
 
 ## Package Documentation
 
