@@ -201,6 +201,200 @@ def _replace_key(text: str, key: str, value: str) -> str:
     return pattern.sub(value, text)
 
 
+# ── Humanize unfilled placeholders ──────────────────────────────────────
+
+_HUMANIZE_RE = re.compile(
+    r"<!--\s*REPLACE:\s*[a-zA-Z0-9_]+\s*[—-]\s*(.*?)\s*-->",
+    re.DOTALL,
+)
+
+
+def _humanize_unfilled_placeholders(text: str) -> str:
+    """Convert remaining ``<!-- REPLACE: key — desc -->`` to user-friendly markers.
+
+    Skips matches inside backtick inline code.
+    """
+
+    def _humanize_match(m: re.Match[str]) -> str:
+        start = m.start()
+        preceding = text[:start]
+        if preceding.count('`') % 2 == 1:
+            return m.group(0)
+
+        desc = m.group(1).strip()
+        example_idx = desc.find("Example:")
+        if example_idx > 0:
+            desc = desc[:example_idx].rstrip().rstrip(".")
+        desc = " ".join(desc.split())
+        return f"<!replace --- {desc} --- or add a link--->"
+
+    return _HUMANIZE_RE.sub(_humanize_match, text)
+
+
+# ── Domain-doc link rendering ──────────────────────────────────────────
+
+# Maps template filenames → domain doc filenames.
+_DOMAIN_DOC_MAP: Dict[str, str] = {
+    "operations.md": "operations.md",
+    "workflows.md": "workflows.md",
+    "tools.md": "tools.md",
+    "library_api.md": "library-api.md",
+    "skills.md": "skills.md",
+}
+
+
+def _key_to_heading(key: str) -> str:
+    """Convert a placeholder key like ``standard_workflows`` to a heading."""
+    return key.replace("_", " ").title()
+
+
+def _key_to_anchor(key: str) -> str:
+    """Convert a placeholder key to a Markdown anchor fragment."""
+    return key.replace("_", "-").lower()
+
+
+def _replace_key_with_link(
+    text: str,
+    key: str,
+    domain_doc_relpath: str,
+) -> str:
+    """Replace a ``<!-- REPLACE: key … -->`` with a humanized marker + link.
+
+    The marker is kept so users can see what the placeholder is for.
+    A Markdown link to the domain doc section is inserted below it.
+    """
+    anchor = _key_to_anchor(key)
+    heading = _key_to_heading(key)
+
+    pattern = re.compile(
+        r"(<!--\s*REPLACE:\s*"
+        + re.escape(key)
+        + r"\s*(?:—\s*(.*?))?\s*-->)",
+        re.DOTALL,
+    )
+
+    def _repl(m: re.Match[str]) -> str:
+        desc = (m.group(2) or heading).strip()
+        example_idx = desc.find("Example:")
+        if example_idx > 0:
+            desc = desc[:example_idx].rstrip().rstrip(".")
+        desc = " ".join(desc.split())
+        marker = f"<!replace --- {desc} --- or add a link--->"
+        link = f"\nSee [{heading}]({domain_doc_relpath}#{anchor})\n"
+        return marker + "\n" + link
+
+    return pattern.sub(_repl, text)
+
+
+def render_docs_with_domain_links(
+    state: WizardState,
+    output_dir: Path,
+    domain_docs_dir: Optional[Path] = None,
+) -> List[Path]:
+    """Render templates with links to separate domain docs.
+
+    Template files get humanized markers + links.  The actual domain
+    content is written to ``domain_docs_dir`` (defaults to
+    ``output_dir / "domain"``).
+
+    Returns:
+        List of all paths written (templates + domain docs).
+    """
+    if domain_docs_dir is None:
+        domain_docs_dir = output_dir / "domain"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    domain_docs_dir.mkdir(parents=True, exist_ok=True)
+
+    context = _build_context(state)
+    repeat_ctx = _build_repeat_context(state)
+    written: List[Path] = []
+
+    # Relative path from output_dir to domain_docs_dir for links
+    try:
+        rel_domain = domain_docs_dir.relative_to(output_dir)
+    except ValueError:
+        rel_domain = Path("domain")
+
+    for name in TEMPLATE_FILES:
+        try:
+            path = _TEMPLATES_DIR / name
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+
+            # 1. Expand REPEAT blocks (same as normal rendering)
+            def _expand_repeat(m: re.Match, rc=repeat_ctx) -> str:
+                rname = m.group(2)
+                body = m.group(3)
+                rows = rc.get(rname)
+                if not rows:
+                    return m.group(0)
+                parts: List[str] = []
+                for row_ctx in rows:
+                    rendered_body = body
+                    for k, v in row_ctx.items():
+                        rendered_body = _replace_key(rendered_body, k, v)
+                    parts.append(rendered_body)
+                return "\n".join(parts)
+
+            text = _REPEAT_RE.sub(_expand_repeat, text)
+
+            # 2. Collect filled values into domain doc content
+            domain_doc_name = _DOMAIN_DOC_MAP.get(name, name)
+            domain_sections: List[str] = []
+            domain_relpath = str(rel_domain / domain_doc_name)
+
+            filled_keys = [k for k in context if _has_placeholder(text, k)]
+
+            for key in filled_keys:
+                value = context[key]
+                heading = _key_to_heading(key)
+                domain_sections.append(f"## {heading}\n\n{value}\n")
+                text = _replace_key_with_link(text, key, domain_relpath)
+
+            # 3. Humanize any remaining unfilled placeholders
+            text = _humanize_unfilled_placeholders(text)
+
+            # Write template file
+            dest = output_dir / name
+            dest.write_text(text, encoding="utf-8")
+            written.append(dest)
+
+            # Write domain doc if we have any sections
+            if domain_sections:
+                doc_title = _key_to_heading(
+                    domain_doc_name.replace(".md", "").replace("-", "_")
+                )
+                domain_content = (
+                    f"# {doc_title} — Domain Knowledge\n\n"
+                    + "\n".join(domain_sections)
+                )
+                doc_dest = domain_docs_dir / domain_doc_name
+                doc_dest.write_text(domain_content, encoding="utf-8")
+                written.append(doc_dest)
+                logger.debug("Wrote domain doc %s", doc_dest)
+
+            logger.debug("Wrote template %s → %s", name, dest)
+        except Exception as exc:
+            logger.warning("Failed to render template %s: %s", name, exc)
+
+    logger.info(
+        "Rendered %d templates + domain docs to %s",
+        len(written),
+        output_dir,
+    )
+    return written
+
+
+def _has_placeholder(text: str, key: str) -> bool:
+    """Check if *text* contains a ``<!-- REPLACE: key … -->`` placeholder."""
+    pattern = re.compile(
+        r"<!--\s*REPLACE:\s*" + re.escape(key) + r"\s*(?:—.*?)?\s*-->",
+        re.DOTALL,
+    )
+    return bool(pattern.search(text))
+
+
 # ── Context builders ────────────────────────────────────────────────────
 
 

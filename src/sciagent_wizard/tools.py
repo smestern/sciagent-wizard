@@ -490,7 +490,7 @@ def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = Fals
         return json.dumps({
             "error": (
                 "Fullstack mode is not available in public mode. "
-                "Please choose 'copilot_agent' or 'markdown'."
+                "Please choose 'copilot_agent', 'copilot_plugin', or 'markdown'."
             )
         })
 

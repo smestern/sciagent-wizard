@@ -28,7 +28,10 @@ from typing import Optional
 from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
-from sciagent_wizard.rendering import render_docs as render_doc_templates
+from sciagent_wizard.rendering import (
+    render_docs as render_doc_templates,
+    render_docs_with_domain_links,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +87,7 @@ def generate_copilot_project(
 
     # ── Package docs ────────────────────────────────────────────────
     docs_dir = project_dir / "docs"
-    render_doc_templates(state, docs_dir)
+    render_docs_with_domain_links(state, docs_dir)
     if state.package_docs:
         write_docs(state, docs_dir)
 
@@ -118,22 +121,6 @@ If a rigor warning is raised by `execute_code` (indicated by
 4. Never silently bypass or suppress rigor warnings.
 """
 
-_CLARIFICATION_INSTRUCTIONS = """\
-### Clarification & Follow-Up
-
-Use `#tool:vscode/askQuestions` freely to resolve ambiguities **during** your
-workflow — do not make large assumptions when a quick question would yield a
-better outcome.
-
-- Ask when: the request is ambiguous, multiple valid approaches exist, key
-  parameters are missing, or an assumption could significantly change the result
-- Do NOT ask when: the task is straightforward, the information was already
-  provided, or you can determine the answer by reading the data
-- Prefer structured multi-choice questions over open-ended ones
-- Batch related questions together
-- **NO blocking questions at the end** — ask during the workflow
-"""
-
 
 def _vscode_agent_md(state: WizardState, instructions: str) -> str:
     """Generate a VS Code custom agent file (.agent.md format)."""
@@ -145,7 +132,6 @@ def _vscode_agent_md(state: WizardState, instructions: str) -> str:
         "fetch",          # fetch URLs
         "editFiles",      # create/edit files
         "findTestFiles",  # discover test files
-        "vscode/askQuestions",  # ask the user for clarification
     ]
     tools_yaml = "\n".join(f"  - {t}" for t in tools)
 
@@ -171,7 +157,7 @@ tools:
 {handoffs_yaml}
 ---"""
 
-    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n\n{_CLARIFICATION_INSTRUCTIONS}\n"
+    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n"
 
 
 # ── Claude Code sub-agent .md ──────────────────────────────────────────
@@ -189,7 +175,7 @@ tools: {tools}
 model: sonnet
 ---"""
 
-    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n\n{_CLARIFICATION_INSTRUCTIONS}\n"
+    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n\n"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -320,7 +306,7 @@ def generate_copilot_plugin(
 
     # ── Package docs ────────────────────────────────────────────────
     docs_dir = project_dir / "docs"
-    render_doc_templates(state, docs_dir)
+    render_docs_with_domain_links(state, docs_dir)
     if state.package_docs:
         write_docs(state, docs_dir)
 
@@ -373,7 +359,7 @@ tools:
 {handoffs_yaml}
 ---"""
 
-    body = instructions + "\n\n" + _RIGOR_GUARDRAIL_INSTRUCTIONS + "\n\n" + _CLARIFICATION_INSTRUCTIONS
+    body = instructions + "\n\n" + _RIGOR_GUARDRAIL_INSTRUCTIONS + "\n\n"
     return f"{frontmatter}\n\n{body}\n"
 
 

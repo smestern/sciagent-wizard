@@ -472,8 +472,9 @@ class WizardAgent(BaseScientificAgent):
                     "Set the output format for the generated agent. Options: "
                     "'fullstack' (full Python submodule with web UI and CLI), "
                     "'copilot_agent' (VS Code custom agent + Claude Code sub-agent "
-                    "config files), or 'markdown' (platform-agnostic Markdown "
-                    "specification for any LLM). Default is fullstack."
+                    "config files), 'copilot_plugin' (VS Code Copilot plugin with "
+                    "plugin.json, agents/, skills/), or 'markdown' (platform-agnostic "
+                    "Markdown specification for any LLM). Default is fullstack."
                 ),
                 lambda **kw: wizard_tools.tool_set_output_mode(
                     state, guided_mode=self._guided_mode, **kw
@@ -483,9 +484,9 @@ class WizardAgent(BaseScientificAgent):
                     "properties": {
                         "mode": {
                             "type": "string",
-                            "enum": ["fullstack", "copilot_agent", "markdown"],
+                            "enum": ["fullstack", "copilot_agent", "copilot_plugin", "markdown"],
                             "description": (
-                                "The output mode: fullstack, copilot_agent, or markdown."
+                                "The output mode: fullstack, copilot_agent, copilot_plugin, or markdown."
                             ),
                         },
                     },

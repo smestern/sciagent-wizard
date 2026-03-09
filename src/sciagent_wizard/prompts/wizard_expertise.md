@@ -63,6 +63,9 @@ analysis agent.
      execution, guardrails (default)
    - **copilot_agent** — Config files for VS Code Copilot custom agent
      and Claude Code sub-agent
+   - **copilot_plugin** — Full VS Code Copilot plugin with plugin.json
+     manifest, compiled agents, skills as SKILL.md files, and package
+     documentation. Installable via `chat.plugins.paths`.
    - **markdown** — Platform-agnostic Markdown specification that works
      with any LLM
 
