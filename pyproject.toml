@@ -3,7 +3,7 @@
 # Copy it to the new repo root as pyproject.toml.
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=62.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,7 +33,6 @@ classifiers = [
 
 dependencies = [
     # Core framework — when installed as sciagent[wizard], the local install satisfies this.
-    "sciagent>=0.4.0",
     # Wizard-specific deps
     "httpx>=0.25",
     "python-dotenv>=1.0",
@@ -79,6 +78,11 @@ where = ["src"]
 "sciagent_wizard" = [
     "prompts/*.md",
     "templates/*.md",
+    "templates/*.yaml",
+    "templates/*.py",
+    "templates/agents/**/*.md",
+    "templates/prompts/*.md",
+    "templates/skills/**/*.md",
     "templates_html/*.html",
     "static/js/*.js",
     "static/css/*.css",

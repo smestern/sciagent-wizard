@@ -177,7 +177,7 @@ def _register_cli(typer_app):
         ),
         output_mode: str = _typer.Option(
             "fullstack", "--output-mode", "-m",
-            help="Output mode: fullstack, copilot_agent, or markdown.",
+            help="Output mode: fullstack, copilot_agent, copilot_plugin, or markdown.",
         ),
         rigor_level: str = _typer.Option(
             "standard", "--rigor-level", "-r",
@@ -193,7 +193,7 @@ def _register_cli(typer_app):
         except ValueError:
             from rich.console import Console
             Console().print(f"[red]Invalid output mode: {output_mode}[/red]")
-            Console().print("[dim]Valid modes: fullstack, copilot_agent, markdown[/dim]")
+            Console().print("[dim]Valid modes: fullstack, copilot_agent, copilot_plugin, markdown[/dim]")
             raise _typer.Exit(1)
 
         from sciagent.guardrails.scanner import RigorLevel
@@ -283,7 +283,7 @@ def main():
                     output_mode = OutputMode(sys.argv[idx + 1])
                 except ValueError:
                     print(f"Invalid output mode: {sys.argv[idx + 1]}")
-                    print("Valid modes: fullstack, copilot_agent, markdown")
+                    print("Valid modes: fullstack, copilot_agent, copilot_plugin, markdown")
                     sys.exit(1)
 
     # In public mode, force non-fullstack default

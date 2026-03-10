@@ -33,9 +33,7 @@ from .prompt_gen import _build_expertise_text
 from sciagent_wizard.rendering import (
     _TEMPLATES_DIR,
     _build_context,
-    _build_repeat_context,
     _humanize_unfilled_placeholders,
-    render_docs as render_doc_templates,
     render_docs_with_domain_links,
 )
 
@@ -46,6 +44,7 @@ logger = logging.getLogger(__name__)
 _AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "agents"
 _INSTRUCTIONS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "instructions"
 _PROMPTS_SRC = _TEMPLATES_DIR / "prompts"
+_SKILLS_SRC = _TEMPLATES_DIR / "skills"
 
 # ── Regex patterns ─────────────────────────────────────────────────────
 
@@ -240,8 +239,6 @@ def _compile_agents_from_templates(
 
     # Build replacement context from wizard state
     context = _build_context(state)
-    repeat_ctx = _build_repeat_context(state)
-    # Flatten repeat context into replacements (repeat blocks handled separately)
     replacements: dict[str, str] = dict(context)
 
     # Load rigor instructions for inlining
@@ -587,8 +584,9 @@ def _build_plugin_skills(
 ) -> list[str]:
     """Generate SKILL.md files for the plugin.
 
-    Creates:
-    - ``scientific-rigor`` — always included, inlined rigor principles
+    Copies all built-in skill templates from ``_SKILLS_SRC`` (applying
+    placeholder substitutions), then generates dynamic skills:
+
     - ``domain-expertise`` — domain knowledge extracted from wizard state
     - One skill per confirmed package if package docs are available
 
@@ -597,11 +595,30 @@ def _build_plugin_skills(
     skills_dir = project_dir / "skills"
     skill_names: list[str] = []
 
-    # ── scientific-rigor skill (always present) ─────────────────────
-    rigor_skill = skills_dir / "scientific-rigor" / "SKILL.md"
-    rigor_skill.parent.mkdir(parents=True, exist_ok=True)
-    rigor_skill.write_text(_scientific_rigor_skill_md(), encoding="utf-8")
-    skill_names.append("scientific-rigor")
+    # Build replacement context for placeholder substitution
+    context = _build_context(state)
+    replacements: dict[str, str] = dict(context)
+
+    # ── Copy built-in skill templates ───────────────────────────────
+    if _SKILLS_SRC.exists():
+        for skill_dir in sorted(_SKILLS_SRC.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+
+            content = skill_md.read_text(encoding="utf-8")
+            content = _apply_replacements(content, replacements)
+            content = _humanize_unfilled_placeholders(content)
+
+            dest = skills_dir / skill_dir.name / "SKILL.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+            skill_names.append(skill_dir.name)
+            logger.debug("Copied skill template %s", skill_dir.name)
+    else:
+        logger.warning("Skill templates not found: %s", _SKILLS_SRC)
 
     # ── domain-expertise skill ──────────────────────────────────────
     domain_skill = skills_dir / "domain-expertise" / "SKILL.md"
@@ -609,7 +626,8 @@ def _build_plugin_skills(
     domain_skill.write_text(
         _domain_expertise_skill_md(state, full_instructions), encoding="utf-8"
     )
-    skill_names.append("domain-expertise")
+    if "domain-expertise" not in skill_names:
+        skill_names.append("domain-expertise")
 
     # ── per-package skills (if docs available) ──────────────────────
     for pkg in state.confirmed_packages:
@@ -630,83 +648,10 @@ def _build_plugin_skills(
             _package_skill_md(pkg.name, pkg.description, combined),
             encoding="utf-8",
         )
-        skill_names.append(pkg_slug)
+        if pkg_slug not in skill_names:
+            skill_names.append(pkg_slug)
 
     return skill_names
-
-
-def _scientific_rigor_skill_md() -> str:
-    """Generate the scientific-rigor SKILL.md content."""
-    return """\
----
-name: scientific-rigor
-description: >-
-  Enforces scientific rigor principles during data analysis — data integrity,
-  objective analysis, sanity checks, transparent reporting, uncertainty
-  quantification, reproducibility, and safe code execution. Auto-loads when
-  scientific analysis is detected.
-user-invokable: false
----
-
-# Scientific Rigor Principles
-
-These principles **must** be followed during any scientific data analysis.
-They are enforced automatically whenever Copilot detects scientific work.
-
-## 1. Data Integrity
-
-- NEVER generate synthetic, fake, or simulated data to fill gaps or pass tests.
-- Use real experimental data ONLY — if data is missing or corrupted, report
-  honestly.
-- If asked to generate test data, explicitly refuse and explain why.
-
-## 2. Objective Analysis
-
-- NEVER adjust methods, parameters, or thresholds to confirm a hypothesis.
-- Reveal what the data actually shows, not what anyone wants it to show.
-- Report unexpected or negative findings — they are scientifically valuable.
-
-## 3. Sanity Checks
-
-- Always validate inputs before analysis (check for NaN, Inf, empty arrays).
-- Flag values outside expected ranges for the domain.
-- Verify units and scaling are correct.
-- Question results that seem too perfect or too convenient.
-
-## 4. Transparent Reporting
-
-- Report ALL results, including inconvenient ones.
-- Acknowledge when analysis is uncertain or inconclusive.
-- Never hide failed samples, bad data, or contradictory results.
-
-## 5. Uncertainty & Error
-
-- Always report confidence intervals, SEM, or SD where applicable.
-- State N for all measurements.
-- Acknowledge limitations of the analysis methods.
-
-## 6. Reproducibility
-
-- All code must be deterministic and reproducible.
-- Document exact parameters, thresholds, and methods used.
-- Random seeds must be set and documented if any stochastic methods are used.
-
-## 7. Shell / Terminal Policy
-
-- **NEVER** use the terminal tool to execute data analysis or computation code.
-- All analysis must go through the provided analysis tools which enforce
-  scientific rigor checks automatically.
-- The terminal tool may be used **only** for environment setup tasks such as
-  `pip install`, `git` commands, or opening files — and only after describing
-  the command to the user.
-
-## 8. Rigor Warnings
-
-- When analysis tools return warnings requiring confirmation, you **MUST**
-  present the warnings to the user verbatim and ask for confirmation.
-- NEVER silently bypass, suppress, or ignore rigor warnings.
-- If the user confirms, re-call the analysis tool with `confirmed: true`.
-"""
 
 
 def _domain_expertise_skill_md(state: WizardState, instructions: str) -> str:
