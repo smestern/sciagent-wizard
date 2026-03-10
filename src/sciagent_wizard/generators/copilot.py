@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # ── Template source paths ──────────────────────────────────────────────
 
 _AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "agents"
+_CLAUDE_AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".claude" / "agents"
 _INSTRUCTIONS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "instructions"
 _PROMPTS_SRC = _TEMPLATES_DIR / "prompts"
 _SKILLS_SRC = _TEMPLATES_DIR / "skills"
@@ -98,6 +99,18 @@ def generate_copilot_project(
 ) -> Path:
     """Generate a VS Code / Claude Code agent config project.
 
+    Compiles all agent templates from the bundled template directory,
+    applying wizard-state substitutions, rigor inlining, prompt module
+    appending, name prefixing, and domain expertise injection.
+
+    Produces:
+
+    - ``.github/agents/<prefix>-<name>.agent.md`` — VS Code agents
+    - ``.claude/agents/<prefix>-<name>.md`` — Claude Code agents
+    - ``.github/instructions/<name>.instructions.md`` — Shared instructions
+    - ``docs/`` — Package documentation
+    - ``README.md``
+
     Args:
         state: Populated ``WizardState``.
         output_dir: Parent directory. Defaults to CWD.
@@ -125,20 +138,14 @@ def generate_copilot_project(
     instructions_path = instructions_dir / f"{state.agent_name}.instructions.md"
     instructions_path.write_text(full_instructions, encoding="utf-8")
 
-    # ── .github/agents/<name>.agent.md (VS Code format) ─────────────
-    agents_dir = project_dir / ".github" / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    vscode_path = agents_dir / f"{state.agent_name}.agent.md"
-    vscode_path.write_text(
-        _vscode_agent_md(state, full_instructions), encoding="utf-8"
+    # ── Compile VS Code agents from templates ───────────────────────
+    vscode_agent_names = _compile_agents_from_templates(
+        state, project_dir, full_instructions, dest_subdir=".github/agents",
     )
 
-    # ── .claude/agents/<name>.md (Claude Code format) ───────────────
-    claude_dir = project_dir / ".claude" / "agents"
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    claude_path = claude_dir / f"{state.agent_name}.md"
-    claude_path.write_text(
-        _claude_agent_md(state, full_instructions), encoding="utf-8"
+    # ── Compile Claude Code agents from templates ───────────────────
+    claude_agent_names = _compile_claude_agents_from_templates(
+        state, project_dir, full_instructions,
     )
 
     # ── Package docs ────────────────────────────────────────────────
@@ -149,7 +156,10 @@ def generate_copilot_project(
 
     # ── README ──────────────────────────────────────────────────────
     readme_path = project_dir / "README.md"
-    readme_path.write_text(_readme(state), encoding="utf-8")
+    readme_path.write_text(
+        _readme(state, vscode_agent_names, claude_agent_names),
+        encoding="utf-8",
+    )
 
     state.project_dir = str(project_dir)
     logger.info("Copilot/Claude agent config generated: %s", project_dir)
@@ -218,8 +228,10 @@ def _compile_agents_from_templates(
     state: WizardState,
     output_dir: Path,
     domain_expertise: str,
+    *,
+    dest_subdir: str = "agents",
 ) -> list[str]:
-    """Compile agent ``.agent.md`` templates into plugin ``agents/<name>.md`` files.
+    """Compile agent ``.agent.md`` templates into ``<dest_subdir>/<name>.md`` files.
 
     For each template in ``_AGENTS_SRC``:
 
@@ -230,7 +242,15 @@ def _compile_agents_from_templates(
        ``state.agent_name``.
     5. Append domain expertise text.
     6. Humanize remaining unfilled placeholders.
-    7. Write to ``output_dir/agents/<prefixed_name>.md``.
+    7. Write to ``output_dir/<dest_subdir>/<prefixed_name>.md``.
+
+    Args:
+        state: Populated ``WizardState``.
+        output_dir: Root output directory.
+        domain_expertise: Pre-built domain expertise text to append.
+        dest_subdir: Subdirectory under *output_dir* for compiled agents.
+            Defaults to ``"agents"`` (plugin mode).  Pass
+            ``".github/agents"`` for copilot-project mode.
 
     Returns:
         Sorted list of prefixed agent stems (e.g. ``["myagent-coordinator", …]``).
@@ -256,7 +276,7 @@ def _compile_agents_from_templates(
                 _, body = _split_frontmatter(content)
                 prompt_cache[p.name] = body.strip() if body.strip() else content
 
-    agents_dir = output_dir / "agents"
+    agents_dir = output_dir / dest_subdir
     agents_dir.mkdir(parents=True, exist_ok=True)
     agent_names: list[str] = []
 
@@ -340,6 +360,75 @@ def _compile_agents_from_templates(
     return agent_names
 
 
+def _compile_claude_agents_from_templates(
+    state: WizardState,
+    output_dir: Path,
+    domain_expertise: str,
+) -> list[str]:
+    """Compile Claude Code agent templates into ``.claude/agents/<name>.md``.
+
+    Claude templates are self-contained (inline rigor, no prompt module
+    appending).  Compilation applies:
+
+    1. Name prefixing.
+    2. Domain expertise appending.
+    3. Placeholder humanization.
+
+    Returns:
+        Sorted list of prefixed agent stems.
+    """
+    name_prefix = state.agent_name
+
+    claude_dir = output_dir / ".claude" / "agents"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    agent_names: list[str] = []
+
+    if not _CLAUDE_AGENTS_SRC.exists():
+        logger.warning("Claude agent templates not found: %s", _CLAUDE_AGENTS_SRC)
+        return agent_names
+
+    for src_file in sorted(_CLAUDE_AGENTS_SRC.glob("*.md")):
+        raw = src_file.read_text(encoding="utf-8")
+        fm_text, body = _split_frontmatter(raw)
+
+        # Derive a clean stem, stripping any pre-existing "sciagent-" prefix
+        agent_stem = src_file.stem
+        if agent_stem.startswith("sciagent-"):
+            agent_stem = agent_stem[len("sciagent-"):]
+
+        # 1. Name prefixing
+        prefixed_stem = _prefixed(agent_stem, name_prefix)
+        fm_text = re.sub(
+            r"^(name:\s*).+$",
+            rf"\g<1>{prefixed_stem}",
+            fm_text,
+            flags=re.MULTILINE,
+        )
+
+        # 2. Append domain expertise
+        if domain_expertise:
+            body = (
+                body.rstrip()
+                + "\n\n---\n\n"
+                + "## Domain Expertise\n\n"
+                + domain_expertise
+                + "\n"
+            )
+
+        # 3. Humanize remaining unfilled placeholders
+        body = _humanize_unfilled_placeholders(body)
+
+        # Reassemble and write
+        output_content = f"---\n{fm_text}\n---\n\n{body}"
+        dest = claude_dir / f"{prefixed_stem}.md"
+        dest.write_text(output_content, encoding="utf-8")
+        agent_names.append(prefixed_stem)
+        logger.debug("Compiled Claude agent template %s → %s", src_file.name, dest)
+
+    logger.info("Compiled %d Claude agent templates", len(agent_names))
+    return agent_names
+
+
 def _copy_template_docs(
     state: WizardState,
     output_dir: Path,
@@ -369,62 +458,6 @@ def _copy_template_docs(
     return written
 
 
-def _vscode_agent_md(state: WizardState, instructions: str) -> str:
-    """Generate a VS Code custom agent file (.agent.md format)."""
-    # Tools: map to VS Code built-in tool names
-    tools = [
-        "codebase",       # search/read workspace files
-        "terminal",       # run commands (pip, python, etc.)
-        "search",         # web search
-        "fetch",          # fetch URLs
-        "editFiles",      # create/edit files
-        "findTestFiles",  # discover test files
-    ]
-    tools_yaml = "\n".join(f"  - {t}" for t in tools)
-
-    # Handoffs: suggest a planning → implementation flow
-    handoffs_yaml = ""
-    if state.agent_name:
-        handoffs_yaml = f"""handoffs:
-  - label: "Plan Analysis"
-    agent: {state.agent_name}-planner
-    prompt: "Create an analysis plan for the data using the available domain packages."
-    send: false
-  - label: "Review Results"
-    agent: {state.agent_name}-reviewer
-    prompt: "Review the analysis results and check for any issues."
-    send: false"""
-
-    frontmatter = f"""---
-description: >-
-  {state.agent_description}
-name: {state.agent_name}
-tools:
-{tools_yaml}
-{handoffs_yaml}
----"""
-
-    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n"
-
-
-# ── Claude Code sub-agent .md ──────────────────────────────────────────
-
-
-def _claude_agent_md(state: WizardState, instructions: str) -> str:
-    """Generate a Claude Code sub-agent file (.md with YAML frontmatter)."""
-    tools = "Read, Write, Edit, Bash, Grep, Glob"
-
-    frontmatter = f"""---
-name: {state.agent_name}
-description: >-
-  {state.agent_description}
-tools: {tools}
-model: sonnet
----"""
-
-    return f"{frontmatter}\n\n{instructions}\n\n{_RIGOR_GUARDRAIL_INSTRUCTIONS}\n\n"
-
-
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
@@ -445,12 +478,30 @@ def _docs_reference(state: WizardState) -> str:
     return "\n".join(lines)
 
 
-def _readme(state: WizardState) -> str:
+def _readme(
+    state: WizardState,
+    vscode_agent_names: list[str] | None = None,
+    claude_agent_names: list[str] | None = None,
+) -> str:
     """Generate a README for the copilot/claude agent project."""
     slug = state.agent_name
     pkgs = "\n".join(
         f"- **{p.name}**: {p.description[:80]}"
         for p in state.confirmed_packages
+    )
+
+    vscode_names = vscode_agent_names or []
+    claude_names = claude_agent_names or []
+
+    vscode_list = (
+        "\n".join(f"- `@{n}`" for n in vscode_names)
+        if vscode_names
+        else f"- `@{slug}`"
+    )
+    claude_list = (
+        "\n".join(f"- `{n}`" for n in claude_names)
+        if claude_names
+        else f"- `{slug}`"
     )
 
     return f"""\
@@ -462,25 +513,30 @@ def _readme(state: WizardState) -> str:
 
 ## Output Mode: Copilot / Claude Code Agent
 
-This project contains agent configuration files for use with:
+This project contains **{len(vscode_names)} VS Code agents** and
+**{len(claude_names)} Claude Code agents** compiled from SciAgent templates
+with domain-specific expertise.
 
 ### VS Code GitHub Copilot
 
-The custom agent is defined in `.github/agents/{slug}.agent.md`.
+Agents are in `.github/agents/`:
 
-To use it:
+{vscode_list}
+
+To use them:
 1. Copy this project into your workspace
 2. Open VS Code with GitHub Copilot enabled
-3. Select **{state.agent_display_name}** from the Agents dropdown in chat
+3. Select an agent from the Agents dropdown in chat (e.g. `@{slug}-coordinator`)
 
 ### Claude Code
 
-The sub-agent is defined in `.claude/agents/{slug}.md`.
+Agents are in `.claude/agents/`:
 
-To use it:
+{claude_list}
+
+To use them:
 1. Copy the `.claude/agents/` folder into your project
-2. Run Claude Code — it will auto-detect the sub-agent
-3. Ask Claude to use the **{state.agent_name}** agent
+2. Run Claude Code — it will auto-detect the sub-agents
 
 ### Shared Instructions
 

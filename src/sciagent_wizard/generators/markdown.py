@@ -22,15 +22,24 @@ Output structure::
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
 from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
-from sciagent_wizard.rendering import render_docs as render_doc_templates
+from sciagent_wizard.rendering import (
+    _TEMPLATES_DIR,
+    _build_context,
+    _humanize_unfilled_placeholders,
+    render_docs as render_doc_templates,
+)
 
 logger = logging.getLogger(__name__)
+
+# Path to the builtin agents roster template
+_BUILTIN_AGENTS_TEMPLATE = "builtin_agents.md"
 
 
 def generate_markdown_project(
@@ -62,6 +71,7 @@ def generate_markdown_project(
     _write("data-guide.md", _data_guide(state))
     _write("guardrails.md", _guardrails(state))
     _write("workflow.md", _workflow(state))
+    _write("agents.md", _agent_roster(state))
     _write("agent-spec.md", _agent_spec(state))
     _write("README.md", _readme(state))
 
@@ -324,6 +334,66 @@ def _workflow(state: WizardState) -> str:
     return "\n".join(lines)
 
 
+def _agent_roster(state: WizardState) -> str:
+    """Render a customised agent roster from the builtin_agents template.
+
+    Reads the ``builtin_agents.md`` template, applies wizard-state
+    substitutions, prefixes agent names with ``state.agent_name``, and
+    appends a domain expertise section.
+    """
+    prefix = state.agent_name
+
+    # Read the template
+    template_path = _TEMPLATES_DIR / _BUILTIN_AGENTS_TEMPLATE
+    if not template_path.exists():
+        logger.warning("Agent roster template not found: %s", template_path)
+        return f"# {state.agent_display_name} — Agent Roster\n\n*No agent roster template available.*\n"
+
+    text = template_path.read_text(encoding="utf-8")
+
+    # Apply REPLACE placeholder substitutions from wizard state
+    context = _build_context(state)
+    for key, value in context.items():
+        pattern = re.compile(
+            r"<!--\s*REPLACE:\s*"
+            + re.escape(key)
+            + r"\s*(?:—.*?)?\s*-->",
+            re.DOTALL,
+        )
+        text = pattern.sub(value, text)
+
+    # Prefix agent names throughout the roster text
+    _AGENT_STEMS = [
+        "analysis-planner", "data-qc", "sciagent-coder", "coder",
+        "rigor-reviewer", "report-writer", "code-reviewer",
+        "docs-ingestor", "domain-assembler", "coordinator",
+    ]
+    for stem in _AGENT_STEMS:
+        # Replace backtick-wrapped agent names: `stem` → `prefix-stem`
+        clean = stem.removeprefix("sciagent-")
+        prefixed = f"{prefix}-{clean}"
+        text = text.replace(f"`{stem}`", f"`{prefixed}`")
+        # Replace plain references in headings/text for display names
+        # (only full-word to avoid partial matches)
+        text = text.replace(f"→ `{prefixed}`", f"→ `{prefixed}`")
+
+    # Append domain expertise section
+    expertise = _build_expertise_text(state)
+    if expertise:
+        text = (
+            text.rstrip()
+            + "\n\n---\n\n"
+            + "## Domain Expertise\n\n"
+            + expertise
+            + "\n"
+        )
+
+    # Humanize remaining unfilled placeholders
+    text = _humanize_unfilled_placeholders(text)
+
+    return text
+
+
 def _agent_spec(state: WizardState) -> str:
     """Master specification that ties everything together."""
     return f"""\
@@ -358,12 +428,29 @@ Detailed documentation for each domain package is in `docs/`:
 
 ### Extended Reference Documentation
 The `docs/` directory also contains detailed reference templates:
-- [docs/agents.md](docs/agents.md) — Sub-agent roster and roles
+- [agents.md](agents.md) — Sub-agent roster, roles, and handoff workflow
 - [docs/operations.md](docs/operations.md) — Standard operating procedures
 - [docs/skills.md](docs/skills.md) — Skill overview and trigger keywords
 - [docs/tools.md](docs/tools.md) — Tool API reference
 - [docs/library_api.md](docs/library_api.md) — Primary library reference
 - [docs/workflows.md](docs/workflows.md) — Standard analysis workflows
+
+## Available Agents
+
+This agent system includes specialised sub-agents (see [agents.md](agents.md)
+for full details):
+
+| Agent | Role |
+|-------|------|
+| `{state.agent_name}-coordinator` | Master triage and routing |
+| `{state.agent_name}-analysis-planner` | Design the analysis roadmap |
+| `{state.agent_name}-data-qc` | Check data quality before analysis |
+| `{state.agent_name}-coder` | Implement code with scientific rigor |
+| `{state.agent_name}-rigor-reviewer` | Audit results for scientific rigour |
+| `{state.agent_name}-report-writer` | Generate structured reports |
+| `{state.agent_name}-code-reviewer` | Review scripts for correctness |
+| `{state.agent_name}-docs-ingestor` | Learn new library APIs |
+| `{state.agent_name}-domain-assembler` | Configure domain knowledge |
 
 ## Agent Identity
 
@@ -415,6 +502,7 @@ paste the system prompt and relevant context into your preferred tool.
 | `data-guide.md` | Supported data formats, structure, ranges |
 | `guardrails.md` | Safety constraints and validation rules |
 | `workflow.md` | Recommended step-by-step analysis workflow |
+| `agents.md` | Sub-agent roster, roles, and handoff workflow |
 | `docs/` | Detailed package documentation |
 
 ## Quick Start

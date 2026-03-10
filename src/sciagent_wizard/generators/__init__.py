@@ -39,21 +39,13 @@ def generate_project(
     mode = state.output_mode
 
     if mode == OutputMode.COPILOT_AGENT:
-        base = Path(output_dir) if output_dir else Path.cwd()
-        slug = state.agent_name.replace(" ", "_").replace("-", "_")
-        project_dir = base / slug
-        project_dir.mkdir(parents=True, exist_ok=True)
-        return generate_copilot_project(state, project_dir)
+        return generate_copilot_project(state, output_dir=output_dir)
 
     if mode == OutputMode.COPILOT_PLUGIN:
         return generate_copilot_plugin(state, output_dir=output_dir)
 
     if mode == OutputMode.MARKDOWN:
-        base = Path(output_dir) if output_dir else Path.cwd()
-        slug = state.agent_name.replace(" ", "_").replace("-", "_")
-        project_dir = base / slug
-        project_dir.mkdir(parents=True, exist_ok=True)
-        return generate_markdown_project(state, project_dir)
+        return generate_markdown_project(state, output_dir=output_dir)
 
     # Default: FULLSTACK
     return generate_fullstack_project(state, output_dir=output_dir)
