@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sciagent-wizard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-assembly wizard for building domain-specific sciagent agents"
 readme = "README.md"
 license = {text = "MIT"}
@@ -33,7 +33,7 @@ classifiers = [
 
 dependencies = [
     # Core framework — when installed as sciagent[wizard], the local install satisfies this.
-    "sciagent>=0.3.0",
+    "sciagent>=0.4.0",
     # Wizard-specific deps
     "httpx>=0.25",
     "python-dotenv>=1.0",
