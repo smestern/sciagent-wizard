@@ -30,7 +30,7 @@ from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
 from sciagent_wizard.rendering import (
-    _TEMPLATES_DIR,
+    _get_templates_dir,
     _build_context,
     _humanize_unfilled_placeholders,
     render_docs as render_doc_templates,
@@ -344,7 +344,7 @@ def _agent_roster(state: WizardState) -> str:
     prefix = state.agent_name
 
     # Read the template
-    template_path = _TEMPLATES_DIR / _BUILTIN_AGENTS_TEMPLATE
+    template_path = _get_templates_dir() / _BUILTIN_AGENTS_TEMPLATE
     if not template_path.exists():
         logger.warning("Agent roster template not found: %s", template_path)
         return f"# {state.agent_display_name} — Agent Roster\n\n*No agent roster template available.*\n"

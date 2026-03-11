@@ -86,6 +86,7 @@ where = ["src"]
     "templates_html/*.html",
     "static/js/*.js",
     "static/css/*.css",
+    "static/*.png",
 ]
 "sciagent_wizard.docs_ingestor" = [
     "prompts/*.md",

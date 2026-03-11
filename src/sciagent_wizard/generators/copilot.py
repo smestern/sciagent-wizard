@@ -31,7 +31,7 @@ from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
 from sciagent_wizard.rendering import (
-    _TEMPLATES_DIR,
+    _get_templates_dir,
     _build_context,
     _humanize_unfilled_placeholders,
     render_docs_with_domain_links,
@@ -39,13 +39,13 @@ from sciagent_wizard.rendering import (
 
 logger = logging.getLogger(__name__)
 
-# ── Template source paths ──────────────────────────────────────────────
+# ── Template source paths (resolved lazily) ────────────────────────────
 
-_AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "agents"
-_CLAUDE_AGENTS_SRC = _TEMPLATES_DIR / "agents" / ".claude" / "agents"
-_INSTRUCTIONS_SRC = _TEMPLATES_DIR / "agents" / ".github" / "instructions"
-_PROMPTS_SRC = _TEMPLATES_DIR / "prompts"
-_SKILLS_SRC = _TEMPLATES_DIR / "skills"
+
+def _template_subdir(*parts: str) -> Path:
+    """Return ``<templates_dir> / parts``."""
+    return _get_templates_dir().joinpath(*parts)
+
 
 # ── Regex patterns ─────────────────────────────────────────────────────
 
@@ -233,7 +233,7 @@ def _compile_agents_from_templates(
 ) -> list[str]:
     """Compile agent ``.agent.md`` templates into ``<dest_subdir>/<name>.md`` files.
 
-    For each template in ``_AGENTS_SRC``:
+    For each template in the agents source directory:
 
     1. Apply ``<!-- REPLACE: … -->`` substitutions from wizard state.
     2. Inline rigor instructions (replace link → full content).
@@ -263,14 +263,16 @@ def _compile_agents_from_templates(
 
     # Load rigor instructions for inlining
     rigor_text = ""
-    rigor_path = _INSTRUCTIONS_SRC / "sciagent-rigor.instructions.md"
+    instructions_src = _template_subdir("agents", ".github", "instructions")
+    rigor_path = instructions_src / "sciagent-rigor.instructions.md"
     if rigor_path.exists():
         rigor_text = rigor_path.read_text(encoding="utf-8").strip()
 
     # Pre-load prompt modules
     prompt_cache: dict[str, str] = {}
-    if _PROMPTS_SRC.exists():
-        for p in _PROMPTS_SRC.iterdir():
+    prompts_src = _template_subdir("prompts")
+    if prompts_src.exists():
+        for p in prompts_src.iterdir():
             if p.suffix == ".md" and p.is_file():
                 content = p.read_text(encoding="utf-8").strip()
                 _, body = _split_frontmatter(content)
@@ -280,11 +282,12 @@ def _compile_agents_from_templates(
     agents_dir.mkdir(parents=True, exist_ok=True)
     agent_names: list[str] = []
 
-    if not _AGENTS_SRC.exists():
-        logger.warning("Agent templates not found: %s", _AGENTS_SRC)
+    agents_src = _template_subdir("agents", ".github", "agents")
+    if not agents_src.exists():
+        logger.warning("Agent templates not found: %s", agents_src)
         return agent_names
 
-    for src_file in sorted(_AGENTS_SRC.glob("*.agent.md")):
+    for src_file in sorted(agents_src.glob("*.agent.md")):
         raw = src_file.read_text(encoding="utf-8")
 
         # 1. Apply placeholder substitutions
@@ -383,11 +386,12 @@ def _compile_claude_agents_from_templates(
     claude_dir.mkdir(parents=True, exist_ok=True)
     agent_names: list[str] = []
 
-    if not _CLAUDE_AGENTS_SRC.exists():
-        logger.warning("Claude agent templates not found: %s", _CLAUDE_AGENTS_SRC)
+    claude_agents_src = _template_subdir("agents", ".claude", "agents")
+    if not claude_agents_src.exists():
+        logger.warning("Claude agent templates not found: %s", claude_agents_src)
         return agent_names
 
-    for src_file in sorted(_CLAUDE_AGENTS_SRC.glob("*.md")):
+    for src_file in sorted(claude_agents_src.glob("*.md")):
         raw = src_file.read_text(encoding="utf-8")
         fm_text, body = _split_frontmatter(raw)
 
@@ -442,11 +446,12 @@ def _copy_template_docs(
     written = render_docs_with_domain_links(state, templates_dest)
 
     # Copy prompt modules
-    if _PROMPTS_SRC.exists():
+    prompts_src = _template_subdir("prompts")
+    if prompts_src.exists():
         prompts_dest = templates_dest / "prompts"
         prompts_dest.mkdir(parents=True, exist_ok=True)
         context = _build_context(state)
-        for p in sorted(_PROMPTS_SRC.iterdir()):
+        for p in sorted(prompts_src.iterdir()):
             if p.suffix == ".md" and p.is_file():
                 content = p.read_text(encoding="utf-8")
                 content = _apply_replacements(content, context)
@@ -640,7 +645,7 @@ def _build_plugin_skills(
 ) -> list[str]:
     """Generate SKILL.md files for the plugin.
 
-    Copies all built-in skill templates from ``_SKILLS_SRC`` (applying
+    Copies all built-in skill templates from the skills source (applying
     placeholder substitutions), then generates dynamic skills:
 
     - ``domain-expertise`` — domain knowledge extracted from wizard state
@@ -656,8 +661,9 @@ def _build_plugin_skills(
     replacements: dict[str, str] = dict(context)
 
     # ── Copy built-in skill templates ───────────────────────────────
-    if _SKILLS_SRC.exists():
-        for skill_dir in sorted(_SKILLS_SRC.iterdir()):
+    skills_src = _template_subdir("skills")
+    if skills_src.exists():
+        for skill_dir in sorted(skills_src.iterdir()):
             if not skill_dir.is_dir():
                 continue
             skill_md = skill_dir / "SKILL.md"
@@ -674,7 +680,7 @@ def _build_plugin_skills(
             skill_names.append(skill_dir.name)
             logger.debug("Copied skill template %s", skill_dir.name)
     else:
-        logger.warning("Skill templates not found: %s", _SKILLS_SRC)
+        logger.warning("Skill templates not found: %s", skills_src)
 
     # ── domain-expertise skill ──────────────────────────────────────
     domain_skill = skills_dir / "domain-expertise" / "SKILL.md"

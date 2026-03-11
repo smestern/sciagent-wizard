@@ -1,8 +1,9 @@
 """
 template_renderer — Load and render agent documentation templates.
 
-Templates are plain Markdown files stored in the ``templates/`` directory
-alongside this module.  They use HTML-comment placeholders::
+Templates are bundled inside the installed ``sciagent.templates`` package
+(declared as package-data in sciagent's ``setup.py``).  They use
+HTML-comment placeholders::
 
     <!-- REPLACE: key — Human-readable description and example -->
     <!-- REPEAT: name -->  ... section ...  <!-- END_REPEAT -->
@@ -15,6 +16,7 @@ completed manually.
 
 from __future__ import annotations
 
+import importlib.resources
 import logging
 import re
 from pathlib import Path
@@ -24,8 +26,62 @@ from sciagent_wizard.models import WizardState
 
 logger = logging.getLogger(__name__)
 
-_TEMPLATES_DIR = Path(__file__).parent / "templates"
+# Cached result — populated on first call to _get_templates_dir().
+_TEMPLATES_DIR: Path | None = None
 
+
+def _get_templates_dir() -> Path:
+    """Resolve the ``sciagent.templates`` package-data directory.
+
+    Resolution order:
+
+    1. ``importlib.resources.files('sciagent.templates')``  — works when
+       sciagent is pip-installed (including ``pip install -e``).
+    2. Filesystem fallback: ``<sciagent-wizard repo>/../../sciagent/templates``
+       — useful when running from a source checkout without installing
+       sciagent first.
+
+    The result is cached so the lookup only happens once.
+    """
+    global _TEMPLATES_DIR  # noqa: PLW0603
+    if _TEMPLATES_DIR is not None:
+        return _TEMPLATES_DIR
+
+    # 1. importlib.resources (preferred)
+    try:
+        ref = importlib.resources.files("sciagent.templates")
+        resolved = Path(str(ref))
+        if resolved.is_dir():
+            _TEMPLATES_DIR = resolved
+            logger.debug(
+                "Templates via importlib.resources: %s",
+                resolved,
+            )
+            return _TEMPLATES_DIR
+    except (ModuleNotFoundError, TypeError):
+        pass
+
+    # 2. Filesystem fallback for dev environments
+    _dev_candidates = [
+        # Mono-repo layout: sciagent-wizard sits next to sciagent
+        Path(__file__).resolve().parents[3] / "sciagent" / "templates",
+        # Docker / flat layout
+        Path("/app/templates"),
+    ]
+    for candidate in _dev_candidates:
+        if candidate.is_dir():
+            _TEMPLATES_DIR = candidate
+            logger.debug(
+                "Templates via filesystem fallback: %s",
+                candidate,
+            )
+            return _TEMPLATES_DIR
+
+    raise FileNotFoundError(
+        "Cannot locate sciagent templates.  Install sciagent "
+        "(`pip install sciagent`) or set the SCIAGENT_TEMPLATES_DIR "
+        "environment variable."
+    )
 # ── Regex patterns ──────────────────────────────────────────────────────
 
 # Matches:  <!-- REPLACE: key — description -->
@@ -80,7 +136,8 @@ def render_template(
     Returns:
         The rendered Markdown string.
     """
-    path = _TEMPLATES_DIR / template_name
+    tdir = _get_templates_dir()
+    path = tdir / template_name
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
     text = path.read_text(encoding="utf-8")
@@ -131,15 +188,16 @@ def copy_blank_templates(output_dir: Path) -> List[Path]:
     Useful for users who want to fill them in manually.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    tdir = _get_templates_dir()
     written: List[Path] = []
     for name in TEMPLATE_FILES:
-        src = _TEMPLATES_DIR / name
+        src = tdir / name
         if src.exists():
             dest = output_dir / name
             dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
             written.append(dest)
     # Also copy the README
-    readme = _TEMPLATES_DIR / "README.md"
+    readme = tdir / "README.md"
     if readme.exists():
         dest = output_dir / "TEMPLATES_README.md"
         dest.write_text(readme.read_text(encoding="utf-8"), encoding="utf-8")
@@ -315,9 +373,10 @@ def render_docs_with_domain_links(
     except ValueError:
         rel_domain = Path("domain")
 
+    tdir = _get_templates_dir()
     for name in TEMPLATE_FILES:
         try:
-            path = _TEMPLATES_DIR / name
+            path = tdir / name
             if not path.exists():
                 continue
             text = path.read_text(encoding="utf-8")
