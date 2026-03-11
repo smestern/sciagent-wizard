@@ -87,12 +87,15 @@ where = ["src"]
     "static/js/*.js",
     "static/css/*.css",
     "static/*.png",
+    "static/*.svg",
 ]
 "sciagent_wizard.docs_ingestor" = [
     "prompts/*.md",
     "templates_html/*.html",
     "static/*.js",
     "static/*.css",
+    "static/*.png",
+    "static/*.svg",
 ]
 
 [tool.black]
