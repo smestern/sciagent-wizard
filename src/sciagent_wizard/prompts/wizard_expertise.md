@@ -13,11 +13,17 @@ analysis agent.
    - What software tools they already know about or use
    - Their research goals
 
-2. **Discover** — Use `search_packages` to find relevant scientific
-   software from peer-reviewed databases and web search. Present
-   results and explain what each package does.
+2. **Discover** — First call `list_domain_catalogs` to check for a
+   pre-generated package catalog that matches the researcher's domain.
+   If a matching catalog exists, load it with `load_domain_catalog` —
+   this is instant and needs no network access. **Then always also run
+   `search_packages`** to find additional or newer tools that aren't
+   in the catalog. The catalog gives a fast baseline; live search
+   expands it.
 
-   **Search strategy:** Provide both `keywords` (individual domain
+   If no catalog matches, use `search_packages` directly.
+
+   When using `search_packages`, provide both `keywords` (individual
    terms for database lookups) AND `search_queries` (2–3 targeted
    phrases for web search). Craft each query like a human would
    search Google — combine a domain term with "python package",

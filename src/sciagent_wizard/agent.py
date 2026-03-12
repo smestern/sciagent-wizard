@@ -238,6 +238,50 @@ class WizardAgent(BaseScientificAgent):
                 },
             ),
 
+            # ─ Domain catalogs (pre-generated package lists) ────────
+            _create_tool(
+                "list_domain_catalogs",
+                (
+                    "List available pre-generated domain package catalogs. "
+                    "Returns available domains with descriptions and "
+                    "keywords. Call this BEFORE search_packages to check if "
+                    "a curated catalog already exists for the researcher's "
+                    "domain — it's instant and needs no network access. "
+                    "If a matching catalog exists, load it with "
+                    "load_domain_catalog."
+                ),
+                lambda **kw: wizard_tools.tool_list_domain_catalogs(state),
+                {"type": "object", "properties": {}},
+            ),
+            _create_tool(
+                "load_domain_catalog",
+                (
+                    "Load packages from a pre-generated domain catalog. "
+                    "This instantly populates the package list from a "
+                    "curated, pre-built catalog — no network calls needed. "
+                    "Call list_domain_catalogs first to see which domains "
+                    "are available. After loading a catalog, ALWAYS also "
+                    "call search_packages to find additional or newer "
+                    "packages beyond the pre-built list. The catalog is a "
+                    "fast baseline, not a replacement for live search."
+                ),
+                lambda **kw: wizard_tools.tool_load_domain_catalog(state, **kw),
+                {
+                    "type": "object",
+                    "properties": {
+                        "domain": {
+                            "type": "string",
+                            "description": (
+                                "The domain slug to load (e.g. "
+                                "'electrophysiology', 'genomics'). Use the "
+                                "exact domain value from list_domain_catalogs."
+                            ),
+                        },
+                    },
+                    "required": ["domain"],
+                },
+            ),
+
             # ─ Data analysis ────────────────────────────────────────
             _create_tool(
                 "analyze_example_data",

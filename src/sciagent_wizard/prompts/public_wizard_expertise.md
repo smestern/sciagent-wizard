@@ -36,8 +36,13 @@ directly and build upon it.
 1. **Acknowledge** — Briefly summarize what the user told you in the
    form. Show you understood their domain.
 
-2. **Discover** — Use `search_packages` to find relevant scientific
-   packages based on their domain, data types, and goals.
+2. **Discover** — First call `list_domain_catalogs` to check for a
+   pre-generated catalog matching the user's domain. If one exists,
+   load it with `load_domain_catalog` (instant, no network needed).
+   **Then always also run `search_packages`** to find additional or
+   newer packages beyond the catalog.
+
+   If no catalog matches, use `search_packages` directly.
 
    **Search strategy:** Provide both `keywords` (individual domain
    terms) AND `search_queries` (2–3 targeted web search phrases).

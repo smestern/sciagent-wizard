@@ -88,6 +88,8 @@ where = ["src"]
     "static/css/*.css",
     "static/*.png",
     "static/*.svg",
+    "sources/domain_catalogs/*.json",
+    "sources/domain_catalogs/*.md",
 ]
 "sciagent_wizard.docs_ingestor" = [
     "prompts/*.md",

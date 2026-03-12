@@ -119,6 +119,7 @@ class DiscoverySource(str, Enum):
     PAPERS_WITH_CODE = "papers_with_code"
     PUBMED = "pubmed"
     GOOGLE_CSE = "google_cse"
+    CACHED = "cached"  # loaded from a pre-generated domain catalog
     USER = "user"  # manually specified by the researcher
 
 
@@ -200,6 +201,7 @@ class WizardState:
     # ─ Discovery results ────────────────────────────────────────────
     all_candidates: List[PackageCandidate] = field(default_factory=list)
     confirmed_packages: List[PackageCandidate] = field(default_factory=list)
+    loaded_catalogs: List[str] = field(default_factory=list)  # domain slugs loaded from cache
 
     # ─ Generated agent identity ─────────────────────────────────────
     agent_name: str = ""

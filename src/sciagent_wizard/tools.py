@@ -150,6 +150,71 @@ def tool_search_packages(
     }, indent=2)
 
 
+# ── Domain catalog tools ───────────────────────────────────────────────
+
+
+def tool_list_domain_catalogs(state: WizardState) -> str:
+    """List available pre-generated domain package catalogs."""
+    from .sources.domain_catalogs import list_catalogs
+
+    catalogs = list_catalogs()
+    return json.dumps({
+        "available_domains": len(catalogs),
+        "catalogs": catalogs,
+    }, indent=2)
+
+
+def tool_load_domain_catalog(
+    state: WizardState,
+    domain: str,
+) -> str:
+    """Load packages from a pre-generated domain catalog."""
+    from .sources.domain_catalogs import load_catalog
+    from .sources.ranker import rank_and_deduplicate
+
+    try:
+        cached_packages = load_catalog(domain)
+    except FileNotFoundError as exc:
+        return json.dumps({"error": str(exc)})
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    # Track which catalogs have been loaded
+    if domain not in state.loaded_catalogs:
+        state.loaded_catalogs.append(domain)
+
+    # Merge with any existing candidates (e.g. from a previous catalog
+    # load or live search) via the standard dedup pipeline
+    if state.all_candidates:
+        merged = rank_and_deduplicate(state.all_candidates + cached_packages)
+    else:
+        merged = rank_and_deduplicate(cached_packages)
+
+    state.all_candidates = merged
+
+    # Format identically to tool_search_packages for consistency
+    results = []
+    for i, c in enumerate(merged[:30], 1):
+        results.append({
+            "rank": i,
+            "name": c.name,
+            "description": c.description[:200],
+            "source": c.source.value,
+            "relevance": c.relevance_score,
+            "peer_reviewed": c.peer_reviewed,
+            "citations": c.citations,
+            "install": c.install_command,
+            "homepage": c.homepage,
+        })
+
+    return json.dumps({
+        "catalog_loaded": domain,
+        "total_found": len(merged),
+        "showing": len(results),
+        "results": results,
+    }, indent=2)
+
+
 def tool_analyze_data(state: WizardState, file_paths: List[str]) -> str:
     """Analyze uploaded example data files."""
     from .analyzer import (
