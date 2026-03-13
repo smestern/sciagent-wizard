@@ -61,6 +61,15 @@ const quickstarts = {
         packages: ['lmfit', 'nmrglue', 'rampy'],
         experience: '',
     },
+    other: {
+        description: '',
+        dataTypes: [],
+        analysisGoals: [],
+        researchGoals: [],
+        fileTypes: [],
+        packages: [],
+        experience: '',
+    },
 };
 
 // ── Quick-start ────────────────────────────────────────────────────────
@@ -104,6 +113,10 @@ function useQuickstart(key) {
     // Set packages
     wizardState.knownPackages = [...qs.packages];
     renderTags('packages-container', 'packages-input', wizardState.knownPackages);
+
+    // Focus the textarea for custom entry when description is empty ("Other")
+    const descEl = document.getElementById('domain-desc');
+    if (!qs.description) descEl.focus();
 }
 
 // ── Selectable cards (multi-select) ────────────────────────────────────
