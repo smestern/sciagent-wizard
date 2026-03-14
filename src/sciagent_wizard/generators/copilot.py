@@ -25,11 +25,17 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
+from .profiles import (
+    get_profile,
+    is_excluded_agent,
+    is_excluded_skill,
+    REVIEWER_PROMPT_MODULES,
+)
 from sciagent_wizard.rendering import (
     _get_templates_dir,
     _build_context,
@@ -79,6 +85,7 @@ _AGENT_PROMPT_MAP: dict[str, list[str]] = {
         "clarification.md",
     ],
     "code-reviewer": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "reviewer": REVIEWER_PROMPT_MODULES,
     "docs-ingestor": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
     "coder": [
         "scientific_rigor.md",
@@ -233,16 +240,11 @@ def _compile_agents_from_templates(
 ) -> list[str]:
     """Compile agent ``.agent.md`` templates into ``<dest_subdir>/<name>.md`` files.
 
-    For each template in the agents source directory:
+    Applies profile-aware filtering:
 
-    1. Apply ``<!-- REPLACE: … -->`` substitutions from wizard state.
-    2. Inline rigor instructions (replace link → full content).
-    3. Append prompt modules per ``_AGENT_PROMPT_MAP``.
-    4. Prefix ``name:`` and handoff ``agent:`` references with
-       ``state.agent_name``.
-    5. Append domain expertise text.
-    6. Humanize remaining unfilled placeholders.
-    7. Write to ``output_dir/<dest_subdir>/<prefixed_name>.md``.
+    - Agents in ``exclude_agents`` or consumed by a merge are skipped.
+    - Merged agents (e.g. ``reviewer``) are synthesised from their sources.
+    - Handoff and body rewrites are applied post-compilation.
 
     Args:
         state: Populated ``WizardState``.
@@ -256,6 +258,7 @@ def _compile_agents_from_templates(
         Sorted list of prefixed agent stems (e.g. ``["myagent-coordinator", …]``).
     """
     name_prefix = state.agent_name
+    profile = get_profile(state.profile)
 
     # Build replacement context from wizard state
     context = _build_context(state)
@@ -288,6 +291,13 @@ def _compile_agents_from_templates(
         return agent_names
 
     for src_file in sorted(agents_src.glob("*.agent.md")):
+        agent_stem = src_file.stem.replace(".agent", "")
+
+        # ── Profile filtering — skip excluded / consumed agents ─────
+        if is_excluded_agent(agent_stem, profile):
+            logger.debug("Skipping excluded agent: %s", agent_stem)
+            continue
+
         raw = src_file.read_text(encoding="utf-8")
 
         # 1. Apply placeholder substitutions
@@ -303,7 +313,6 @@ def _compile_agents_from_templates(
             body = _RIGOR_LINK_PATTERN.sub(replacement_block, body)
 
         # 3. Append prompt modules
-        agent_stem = src_file.stem.replace(".agent", "")
         if agent_stem in _AGENT_PROMPT_MAP:
             appendices: list[str] = []
             for prompt_name in _AGENT_PROMPT_MAP[agent_stem]:
@@ -359,8 +368,259 @@ def _compile_agents_from_templates(
         agent_names.append(prefixed_stem)
         logger.debug("Compiled agent template %s → %s", src_file.name, dest)
 
+    # ── Produce merged agents ───────────────────────────────────────
+    for merged_name, spec in profile.get("merge_agents", {}).items():
+        merged_body = _merge_agent_bodies(
+            spec, merged_name, replacements, rigor_text,
+            prompt_cache, domain_expertise, name_prefix,
+        )
+        prefixed_stem = _prefixed(merged_name, name_prefix)
+        dest = agents_dir / f"{prefixed_stem}.md"
+        dest.write_text(merged_body, encoding="utf-8")
+        agent_names.append(prefixed_stem)
+        logger.debug("Compiled merged agent %s → %s", merged_name, dest)
+
+    # ── Post-process: handoff rewrites ──────────────────────────────
+    handoff_rewrites = profile.get("handoff_rewrites", {})
+    body_rewrites = profile.get("body_rewrites", {})
+    if handoff_rewrites or body_rewrites:
+        _apply_post_rewrites(
+            agents_dir, agent_names, handoff_rewrites, body_rewrites, name_prefix,
+        )
+
+    agent_names.sort()
     logger.info("Compiled %d agent templates", len(agent_names))
     return agent_names
+
+
+def _merge_agent_bodies(
+    spec: dict[str, Any],
+    merged_name: str,
+    replacements: dict[str, str],
+    rigor_text: str,
+    prompt_cache: dict[str, str],
+    domain_expertise: str,
+    name_prefix: str,
+) -> str:
+    """Synthesise a merged agent from multiple source templates.
+
+    Reads each source ``.agent.md``, applies substitutions and rigor inlining,
+    concatenates bodies with ``---`` separator, builds unified YAML frontmatter
+    from the merge spec, appends prompt modules (union of sources), and appends
+    domain expertise.
+    """
+    sources = spec["sources"]
+    agents_src = _template_subdir("agents", ".github", "agents")
+
+    # Collect bodies from each source
+    body_parts: list[str] = []
+    seen_prompts: set[str] = set()
+    prompt_names: list[str] = []
+
+    for src_name in sources:
+        src_file = agents_src / f"{src_name}.agent.md"
+        if not src_file.exists():
+            logger.warning("Merge source not found: %s", src_file)
+            continue
+
+        raw = src_file.read_text(encoding="utf-8")
+        raw = _apply_replacements(raw, replacements)
+        _, body = _split_frontmatter(raw)
+
+        # Inline rigor
+        if rigor_text:
+            replacement_block = (
+                "### Shared Scientific Rigor Principles\n\n" + rigor_text
+            )
+            body = _RIGOR_LINK_PATTERN.sub(replacement_block, body)
+
+        body = _humanize_unfilled_placeholders(body)
+        body_parts.append(body.strip())
+
+        # Collect prompt modules (union, deduplicated)
+        for pname in _AGENT_PROMPT_MAP.get(src_name, []):
+            if pname not in seen_prompts:
+                seen_prompts.add(pname)
+                prompt_names.append(pname)
+
+    # Also add prompt modules for the merged name itself
+    for pname in _AGENT_PROMPT_MAP.get(merged_name, []):
+        if pname not in seen_prompts:
+            seen_prompts.add(pname)
+            prompt_names.append(pname)
+
+    merged_body = "\n\n---\n\n".join(body_parts)
+
+    # Append prompt modules
+    appendices: list[str] = []
+    for pname in prompt_names:
+        if pname in prompt_cache:
+            appendices.append(prompt_cache[pname])
+    if appendices:
+        merged_body = (
+            merged_body.rstrip()
+            + "\n\n---\n\n"
+            + "\n\n---\n\n".join(appendices)
+            + "\n"
+        )
+
+    # Append domain expertise
+    if domain_expertise:
+        merged_body = (
+            merged_body.rstrip()
+            + "\n\n---\n\n"
+            + "## Domain Expertise\n\n"
+            + domain_expertise
+            + "\n"
+        )
+
+    # Build unified frontmatter
+    prefixed_stem = _prefixed(merged_name, name_prefix)
+    fm_lines = [
+        f"name: {prefixed_stem}",
+        "description: >-",
+        f"  {spec['description']}",
+    ]
+    if spec.get("argument_hint"):
+        fm_lines.append(f"argument-hint: \"{spec['argument_hint']}\"")
+    if spec.get("tools"):
+        fm_lines.append("tools:")
+        for t in spec["tools"]:
+            fm_lines.append(f"  - {t}")
+    if spec.get("handoffs"):
+        fm_lines.append("handoffs:")
+        for ho in spec["handoffs"]:
+            agent_ref = ho["agent"]
+            if name_prefix and agent_ref not in _BUILTIN_AGENTS:
+                agent_ref = _prefixed(agent_ref, name_prefix)
+            fm_lines.append(f"  - label: \"{ho['label']}\"")
+            fm_lines.append(f"    agent: {agent_ref}")
+            fm_lines.append(f"    prompt: \"{ho['prompt']}\"")
+            send_val = "true" if ho.get("send") else "false"
+            fm_lines.append(f"    send: {send_val}")
+
+    fm_text = "\n".join(fm_lines)
+    return f"---\n{fm_text}\n---\n\n{merged_body}"
+
+
+def _apply_post_rewrites(
+    agents_dir: Path,
+    agent_names: list[str],
+    handoff_rewrites: dict[str, str | None],
+    body_rewrites: dict[str, str],
+    name_prefix: str,
+) -> None:
+    """Post-process compiled agent files to fix handoff refs and body text.
+
+    - ``handoff_rewrites``: maps old agent stem → new stem (or ``None`` to
+      remove the handoff entirely).
+    - ``body_rewrites``: plain-text substitutions in agent body content.
+    """
+    # Build prefixed versions of the rewrite keys
+    prefixed_handoff: dict[str, str | None] = {}
+    for old, new in handoff_rewrites.items():
+        p_old = _prefixed(old, name_prefix) if name_prefix else old
+        p_new = _prefixed(new, name_prefix) if (new and name_prefix) else new
+        prefixed_handoff[p_old] = p_new
+
+    prefixed_body: dict[str, str] = {}
+    for old, new in body_rewrites.items():
+        if old.startswith("@") and name_prefix:
+            p_old = f"@{_prefixed(old[1:], name_prefix)}"
+            if new.startswith("@"):
+                p_new = f"@{_prefixed(new[1:], name_prefix)}"
+            else:
+                p_new = new
+        else:
+            p_old = old
+            p_new = new
+        prefixed_body[p_old] = p_new
+
+    for agent_stem in agent_names:
+        path = agents_dir / f"{agent_stem}.md"
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        fm_text, body = _split_frontmatter(text)
+        changed = False
+
+        # Handoff rewrites in frontmatter
+        if prefixed_handoff:
+            new_fm_lines: list[str] = []
+            fm_lines_list = fm_text.splitlines()
+            i = 0
+            while i < len(fm_lines_list):
+                line = fm_lines_list[i]
+                # Detect `agent: <name>` in handoffs
+                m = re.match(r"^(\s*agent:\s*)(.+)$", line)
+                if m:
+                    ref = m.group(2).strip()
+                    if ref in prefixed_handoff:
+                        replacement = prefixed_handoff[ref]
+                        if replacement is None:
+                            # Remove entire handoff block — backtrack to
+                            # remove the `- label:` line and following lines
+                            # (agent, prompt, send)
+                            while new_fm_lines and not re.match(
+                                r"^\s*- label:", new_fm_lines[-1]
+                            ):
+                                new_fm_lines.pop()
+                            if new_fm_lines and re.match(
+                                r"^\s*- label:", new_fm_lines[-1]
+                            ):
+                                new_fm_lines.pop()
+                            # Skip remaining lines of this handoff entry
+                            i += 1
+                            while i < len(fm_lines_list) and re.match(
+                                r"^\s+(prompt|send):", fm_lines_list[i]
+                            ):
+                                i += 1
+                            changed = True
+                            continue
+                        else:
+                            # Check for duplicate — skip if another handoff
+                            # already references the same target
+                            already_has = any(
+                                re.match(
+                                    rf"^\s*agent:\s*{re.escape(replacement)}\s*$",
+                                    ln,
+                                )
+                                for ln in new_fm_lines
+                            )
+                            if already_has:
+                                # Remove this duplicate handoff block
+                                while new_fm_lines and not re.match(
+                                    r"^\s*- label:", new_fm_lines[-1]
+                                ):
+                                    new_fm_lines.pop()
+                                if new_fm_lines and re.match(
+                                    r"^\s*- label:", new_fm_lines[-1]
+                                ):
+                                    new_fm_lines.pop()
+                                i += 1
+                                while i < len(fm_lines_list) and re.match(
+                                    r"^\s+(prompt|send):", fm_lines_list[i]
+                                ):
+                                    i += 1
+                                changed = True
+                                continue
+                            else:
+                                line = f"{m.group(1)}{replacement}"
+                                changed = True
+                new_fm_lines.append(line)
+                i += 1
+            if changed:
+                fm_text = "\n".join(new_fm_lines)
+
+        # Body rewrites
+        new_body = body
+        for old_txt, new_txt in prefixed_body.items():
+            if old_txt in new_body:
+                new_body = new_body.replace(old_txt, new_txt)
+                changed = True
+
+        if changed:
+            path.write_text(f"---\n{fm_text}\n---\n\n{new_body}", encoding="utf-8")
 
 
 def _compile_claude_agents_from_templates(
@@ -371,16 +631,17 @@ def _compile_claude_agents_from_templates(
     """Compile Claude Code agent templates into ``.claude/agents/<name>.md``.
 
     Claude templates are self-contained (inline rigor, no prompt module
-    appending).  Compilation applies:
+    appending).  Compilation applies profile-aware filtering:
 
-    1. Name prefixing.
-    2. Domain expertise appending.
-    3. Placeholder humanization.
+    - Agents in ``exclude_agents`` or consumed by a merge are skipped.
+    - Merged agents (e.g. ``reviewer``) are synthesised from their sources.
+    - Handoff and body rewrites are applied post-compilation.
 
     Returns:
         Sorted list of prefixed agent stems.
     """
     name_prefix = state.agent_name
+    profile = get_profile(state.profile)
 
     claude_dir = output_dir / ".claude" / "agents"
     claude_dir.mkdir(parents=True, exist_ok=True)
@@ -399,6 +660,11 @@ def _compile_claude_agents_from_templates(
         agent_stem = src_file.stem
         if agent_stem.startswith("sciagent-"):
             agent_stem = agent_stem[len("sciagent-"):]
+
+        # ── Profile filtering — skip excluded / consumed agents ─────
+        if is_excluded_agent(agent_stem, profile):
+            logger.debug("Skipping excluded Claude agent: %s", agent_stem)
+            continue
 
         # 1. Name prefixing
         prefixed_stem = _prefixed(agent_stem, name_prefix)
@@ -429,8 +695,138 @@ def _compile_claude_agents_from_templates(
         agent_names.append(prefixed_stem)
         logger.debug("Compiled Claude agent template %s → %s", src_file.name, dest)
 
+    # ── Produce merged agents for Claude ────────────────────────────
+    for merged_name, spec in profile.get("merge_agents", {}).items():
+        merged_body = _merge_claude_agent_bodies(
+            spec, merged_name, domain_expertise, name_prefix,
+        )
+        if merged_body:
+            prefixed_stem = _prefixed(merged_name, name_prefix)
+            dest = claude_dir / f"{prefixed_stem}.md"
+            dest.write_text(merged_body, encoding="utf-8")
+            agent_names.append(prefixed_stem)
+            logger.debug("Compiled merged Claude agent %s → %s", merged_name, dest)
+
+    # ── Post-process: handoff rewrites + body rewrites ──────────────
+    handoff_rewrites = profile.get("handoff_rewrites", {})
+    body_rewrites = profile.get("body_rewrites", {})
+    if handoff_rewrites or body_rewrites:
+        _apply_post_rewrites(
+            claude_dir, agent_names, handoff_rewrites, body_rewrites, name_prefix,
+        )
+
+    agent_names.sort()
     logger.info("Compiled %d Claude agent templates", len(agent_names))
     return agent_names
+
+
+def _merge_claude_agent_bodies(
+    spec: dict[str, Any],
+    merged_name: str,
+    domain_expertise: str,
+    name_prefix: str,
+) -> str | None:
+    """Synthesise a merged Claude agent from multiple source templates.
+
+    Claude templates are self-contained markdown (no prompt module appending).
+    Returns the full file content, or ``None`` if no sources found.
+    """
+    sources = spec["sources"]
+    claude_src = _template_subdir("agents", ".claude", "agents")
+    if not claude_src.exists():
+        return None
+
+    body_parts: list[str] = []
+    for src_name in sources:
+        # Claude files may use "sciagent-" prefix
+        candidates = [
+            claude_src / f"{src_name}.md",
+            claude_src / f"sciagent-{src_name}.md",
+        ]
+        src_file = next((c for c in candidates if c.exists()), None)
+        if not src_file:
+            logger.warning("Claude merge source not found: %s", src_name)
+            continue
+        raw = src_file.read_text(encoding="utf-8")
+        _, body = _split_frontmatter(raw)
+        body = _humanize_unfilled_placeholders(body)
+        body_parts.append(body.strip())
+
+    if not body_parts:
+        return None
+
+    merged_body = "\n\n---\n\n".join(body_parts)
+    if domain_expertise:
+        merged_body = (
+            merged_body.rstrip()
+            + "\n\n---\n\n"
+            + "## Domain Expertise\n\n"
+            + domain_expertise
+            + "\n"
+        )
+
+    prefixed_stem = _prefixed(merged_name, name_prefix)
+    fm_lines = [
+        f"name: {prefixed_stem}",
+        "description: >-",
+        f"  {spec['description']}",
+    ]
+    fm_text = "\n".join(fm_lines)
+    return f"---\n{fm_text}\n---\n\n{merged_body}"
+
+
+def _merge_skill_bodies(
+    merged_name: str,
+    spec: dict[str, Any],
+    skills_src: Path,
+    replacements: dict[str, str],
+) -> str | None:
+    """Merge multiple skill SKILL.md templates into one.
+
+    *spec* has ``sources`` (list of skill dir names), ``description``
+    (override or None to keep original), and ``section_titles`` mapping
+    each source → optional heading (None keeps content as-is).
+    """
+    sources: list[str] = spec.get("sources", [])
+    section_titles: dict[str, str | None] = spec.get("section_titles", {})
+    body_parts: list[str] = []
+    first_fm: dict[str, str] = {}
+
+    for src_name in sources:
+        src_file = skills_src / src_name / "SKILL.md"
+        if not src_file.exists():
+            logger.warning("Merge skill source not found: %s", src_name)
+            continue
+        raw = src_file.read_text(encoding="utf-8")
+        raw = _apply_replacements(raw, replacements)
+        raw = _humanize_unfilled_placeholders(raw)
+        fm_text, body = _split_frontmatter(raw)
+        if not first_fm and fm_text:
+            # Parse first source's frontmatter for fallback description
+            for line in fm_text.splitlines():
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    first_fm[k.strip()] = v.strip()
+
+        title = section_titles.get(src_name, src_name)
+        if title:
+            body_parts.append(f"## {title}\n\n{body.strip()}")
+        else:
+            body_parts.append(body.strip())
+
+    if not body_parts:
+        return None
+
+    merged_body = "\n\n---\n\n".join(body_parts)
+
+    # Build frontmatter
+    desc = spec.get("description") or first_fm.get("description", "")
+    fm_lines = [
+        f"name: {merged_name}",
+        "description: >-",
+        f"  {desc}",
+    ]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n\n" + merged_body + "\n"
 
 
 def _copy_template_docs(
@@ -645,14 +1041,16 @@ def _build_plugin_skills(
 ) -> list[str]:
     """Generate SKILL.md files for the plugin.
 
-    Copies all built-in skill templates from the skills source (applying
-    placeholder substitutions), then generates dynamic skills:
+    Copies built-in skill templates (applying placeholder substitutions),
+    filters and merges them according to the active profile, then generates
+    dynamic skills:
 
     - ``domain-expertise`` — domain knowledge extracted from wizard state
     - One skill per confirmed package if package docs are available
 
     Returns list of skill directory names.
     """
+    profile = get_profile(state.profile)
     skills_dir = project_dir / "skills"
     skill_names: list[str] = []
 
@@ -660,7 +1058,7 @@ def _build_plugin_skills(
     context = _build_context(state)
     replacements: dict[str, str] = dict(context)
 
-    # ── Copy built-in skill templates ───────────────────────────────
+    # ── Copy built-in skill templates (profile-filtered) ────────────
     skills_src = _template_subdir("skills")
     if skills_src.exists():
         for skill_dir in sorted(skills_src.iterdir()):
@@ -668,6 +1066,9 @@ def _build_plugin_skills(
                 continue
             skill_md = skill_dir / "SKILL.md"
             if not skill_md.exists():
+                continue
+            if is_excluded_skill(skill_dir.name, profile):
+                logger.debug("Skipping excluded/consumed skill %s", skill_dir.name)
                 continue
 
             content = skill_md.read_text(encoding="utf-8")
@@ -679,6 +1080,22 @@ def _build_plugin_skills(
             dest.write_text(content, encoding="utf-8")
             skill_names.append(skill_dir.name)
             logger.debug("Copied skill template %s", skill_dir.name)
+
+        # ── Produce merged skills ───────────────────────────────────
+        for merged_name, spec in profile.get("merge_skills", {}).items():
+            merged_content = _merge_skill_bodies(
+                merged_name, spec, skills_src, replacements
+            )
+            if merged_content is None:
+                continue
+            # If the merged name already exists (self-merge like
+            # configure-domain), overwrite it with the merged version.
+            dest = skills_dir / merged_name / "SKILL.md"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(merged_content, encoding="utf-8")
+            if merged_name not in skill_names:
+                skill_names.append(merged_name)
+            logger.debug("Wrote merged skill %s", merged_name)
     else:
         logger.warning("Skill templates not found: %s", skills_src)
 
@@ -819,6 +1236,11 @@ def _plugin_readme(
     n_agents = len(agent_names)
     n_skills = len(skill_names)
 
+    agent_short_names = ", ".join(
+        n.removeprefix(state.agent_name + "-") if n.startswith(state.agent_name + "-") else n
+        for n in agent_names
+    )
+
     return f"""\
 # {state.agent_display_name} — Copilot Plugin
 
@@ -858,9 +1280,7 @@ Add this plugin directory to your VS Code settings:
 
 ## What's Included
 
-- **{n_agents} compiled agents** from SciAgent templates — coordinator, coder,
-  analysis-planner, data-qc, rigor-reviewer, report-writer, code-reviewer,
-  docs-ingestor, and domain-assembler — each with inlined rigor instructions,
+- **{n_agents} compiled agents** from SciAgent templates — {agent_short_names} — each with inlined rigor instructions,
   appended prompt modules, and domain expertise.
 - **Skills** for scientific rigor enforcement, domain-specific knowledge, and
   per-package API reference.

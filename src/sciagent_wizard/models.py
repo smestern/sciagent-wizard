@@ -225,6 +225,7 @@ class WizardState:
     output_mode: "OutputMode" = None  # type: ignore[assignment]  # set post-init
     output_dir: str = ""
     project_dir: str = ""
+    profile: str = "compact"  # "compact" (6 agents) or "full" (9 agents)
 
     # ─ Guided / public mode ─────────────────────────────────────────
     guided_mode: bool = False
@@ -264,6 +265,7 @@ class WizardState:
             ],
             "bounds": self.bounds,
             "output_mode": self.output_mode.value,
+            "profile": self.profile,
             "package_docs_count": len(self.package_docs),
             "output_dir": self.output_dir,
             "project_dir": self.project_dir,

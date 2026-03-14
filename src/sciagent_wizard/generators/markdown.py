@@ -29,6 +29,7 @@ from typing import Optional
 from sciagent_wizard.models import WizardState
 from .docs_gen import write_docs
 from .prompt_gen import _build_expertise_text
+from .profiles import get_profile, get_agent_roster
 from sciagent_wizard.rendering import (
     _get_templates_dir,
     _build_context,
@@ -362,11 +363,14 @@ def _agent_roster(state: WizardState) -> str:
         )
         text = pattern.sub(value, text)
 
-    # Prefix agent names throughout the roster text
+    # Prefix agent names throughout the roster text.
+    # Build stems list from the active profile roster.
+    profile = get_profile(state.profile)
+    roster = get_agent_roster(state.profile)
     _AGENT_STEMS = [
         "analysis-planner", "data-qc", "sciagent-coder", "coder",
         "rigor-reviewer", "report-writer", "code-reviewer",
-        "docs-ingestor", "domain-assembler", "coordinator",
+        "docs-ingestor", "domain-assembler", "coordinator", "reviewer",
     ]
     for stem in _AGENT_STEMS:
         # Replace backtick-wrapped agent names: `stem` → `prefix-stem`
@@ -376,6 +380,33 @@ def _agent_roster(state: WizardState) -> str:
         # Replace plain references in headings/text for display names
         # (only full-word to avoid partial matches)
         text = text.replace(f"→ `{prefixed}`", f"→ `{prefixed}`")
+
+    # Post-filter: remove lines referencing excluded agents.
+    if profile.get("exclude_agents") or profile.get("merge_agents"):
+        filtered_lines: list[str] = []
+        roster_stems = {stem for stem, _ in roster}
+        for line in text.splitlines():
+            # Check if this line references an excluded agent (e.g. table
+            # rows, bullet items, headings mentioning a specific agent).
+            skip = False
+            for stem in _AGENT_STEMS:
+                clean = stem.removeprefix("sciagent-")
+                if clean in roster_stems:
+                    continue  # This agent is kept
+                prefixed = f"{prefix}-{clean}"
+                if f"`{prefixed}`" in line or f"@{prefixed}" in line:
+                    skip = True
+                    break
+            if not skip:
+                filtered_lines.append(line)
+        text = "\n".join(filtered_lines)
+
+    # Apply body rewrites (e.g. @analysis-planner → /analysis-planner skill)
+    for old_ref, new_ref in profile.get("body_rewrites", {}).items():
+        # Apply with prefix
+        prefixed_old = old_ref.replace("@", f"@{prefix}-")
+        prefixed_new = new_ref.replace("@", f"@{prefix}-")
+        text = text.replace(prefixed_old, prefixed_new)
 
     # Append domain expertise section
     expertise = _build_expertise_text(state)
@@ -396,6 +427,11 @@ def _agent_roster(state: WizardState) -> str:
 
 def _agent_spec(state: WizardState) -> str:
     """Master specification that ties everything together."""
+    roster = get_agent_roster(state.profile)
+    agent_table_rows = "\n".join(
+        f"| `{state.agent_name}-{stem}` | {role} |"
+        for stem, role in roster
+    )
     return f"""\
 # {state.agent_display_name} — Agent Specification
 
@@ -442,15 +478,7 @@ for full details):
 
 | Agent | Role |
 |-------|------|
-| `{state.agent_name}-coordinator` | Master triage and routing |
-| `{state.agent_name}-analysis-planner` | Design the analysis roadmap |
-| `{state.agent_name}-data-qc` | Check data quality before analysis |
-| `{state.agent_name}-coder` | Implement code with scientific rigor |
-| `{state.agent_name}-rigor-reviewer` | Audit results for scientific rigour |
-| `{state.agent_name}-report-writer` | Generate structured reports |
-| `{state.agent_name}-code-reviewer` | Review scripts for correctness |
-| `{state.agent_name}-docs-ingestor` | Learn new library APIs |
-| `{state.agent_name}-domain-assembler` | Configure domain knowledge |
+{agent_table_rows}
 
 ## Agent Identity
 
