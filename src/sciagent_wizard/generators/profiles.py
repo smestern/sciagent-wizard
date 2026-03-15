@@ -100,8 +100,9 @@ COMPACT_ONLY_AGENTS: set[str] = {"reviewer"}
 
 # Prompt modules to append per agent — the merged ``reviewer`` gets the
 # union of code-reviewer + rigor-reviewer prompts (which are identical).
+# ``scientific_rigor.md`` is omitted — rigor is injected once via the
+# inline link-replacement in ``copilot.py``.
 REVIEWER_PROMPT_MODULES: list[str] = [
-    "scientific_rigor.md",
     "communication_style.md",
     "clarification.md",
 ]

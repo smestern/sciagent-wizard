@@ -66,29 +66,36 @@ _RIGOR_LINK_PATTERN = re.compile(
     r"\([^)]*sciagent-rigor\.instructions\.md\)\.",
 )
 
+# Matches a markdown table row with a bold agent name in the second column:
+#   | <need> | **<agent-stem>** | <when> |
+_ROUTING_ROW_RE = re.compile(
+    r'^\|\s*(?P<need>[^|]+?)\s*\|\s*\*\*(?P<agent>[^*]+)\*\*\s*\|\s*(?P<when>[^|]+?)\s*\|$'
+)
+
 # Which prompt modules to append to each agent.
+# NOTE: ``scientific_rigor.md`` is intentionally absent — rigor text is
+# injected once via the ``_RIGOR_LINK_PATTERN`` inline replacement so that
+# each agent receives exactly one copy.  See ``build_plugin.py`` for the
+# matching change in the core repo.
 _AGENT_PROMPT_MAP: dict[str, list[str]] = {
-    "coordinator": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
-    "analysis-planner": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "coordinator": ["communication_style.md", "clarification.md"],
+    "analysis-planner": ["communication_style.md", "clarification.md"],
     "data-qc": [
-        "scientific_rigor.md",
         "communication_style.md",
         "code_execution.md",
         "incremental_execution.md",
         "clarification.md",
     ],
-    "rigor-reviewer": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "rigor-reviewer": ["communication_style.md", "clarification.md"],
     "report-writer": [
-        "scientific_rigor.md",
         "communication_style.md",
         "reproducible_script.md",
         "clarification.md",
     ],
-    "code-reviewer": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "code-reviewer": ["communication_style.md", "clarification.md"],
     "reviewer": REVIEWER_PROMPT_MODULES,
-    "docs-ingestor": ["scientific_rigor.md", "communication_style.md", "clarification.md"],
+    "docs-ingestor": ["communication_style.md", "clarification.md"],
     "coder": [
-        "scientific_rigor.md",
         "communication_style.md",
         "code_execution.md",
         "incremental_execution.md",
@@ -382,9 +389,101 @@ def _compile_agents_from_templates(
             agents_dir, agent_names, handoff_rewrites, body_rewrites, name_prefix,
         )
 
+    # ── Post-process: rewrite coordinator routing table ─────────────
+    _rewrite_routing_table(agents_dir, agent_names, profile, name_prefix)
+
     agent_names.sort()
     logger.info("Compiled %d agent templates", len(agent_names))
     return agent_names
+
+
+def _rewrite_routing_table(
+    agents_dir: Path,
+    agent_names: list[str],
+    profile: dict[str, Any],
+    name_prefix: str,
+) -> None:
+    """Rewrite the coordinator's routing table to match built agent names.
+
+    Applies three transformations to table rows:
+    1. **Exclude** — rows for excluded agents are dropped.
+    2. **Merge** — rows whose agent was consumed by a merge are renamed;
+       when two source rows map to the same merged name the rows are
+       combined into one (Need descriptions joined with " & ").
+    3. **Prefix** — surviving agent names get the build prefix.
+
+    No-ops gracefully when the coordinator file is absent.
+    """
+    exclude_agents = set(profile.get("exclude_agents", []))
+    merge_agents: dict[str, Any] = profile.get("merge_agents", {})
+
+    # Build source-agent → merged-name lookup
+    source_to_merged: dict[str, str] = {}
+    for merged_name, spec in merge_agents.items():
+        for src in spec["sources"]:
+            source_to_merged[src] = merged_name
+
+    # Identify the coordinator file
+    coord_stem = _prefixed("coordinator", name_prefix)
+    coord_file: Path | None = None
+    for name in agent_names:
+        if name == coord_stem:
+            coord_file = agents_dir / f"{name}.md"
+            break
+    if coord_file is None or not coord_file.exists():
+        return
+
+    content = coord_file.read_text(encoding="utf-8")
+    fm_text, body = _split_frontmatter(content)
+    if not body:
+        return
+
+    lines = body.split("\n")
+    new_lines: list[str] = []
+    # Track merged rows so we can combine duplicates
+    # key = final display name, value = index into new_lines
+    seen_merged: dict[str, int] = {}
+
+    for line in lines:
+        m = _ROUTING_ROW_RE.match(line)
+        if not m:
+            new_lines.append(line)
+            continue
+
+        agent_stem = m.group("agent").strip()
+        need = m.group("need").strip()
+        when = m.group("when").strip()
+
+        # Drop excluded agents
+        if agent_stem in exclude_agents:
+            continue
+
+        # Rename merged agents
+        if agent_stem in source_to_merged:
+            agent_stem = source_to_merged[agent_stem]
+
+        # Apply prefix
+        display_name = _prefixed(agent_stem, name_prefix)
+
+        # Combine rows that map to the same final name
+        if display_name in seen_merged:
+            idx = seen_merged[display_name]
+            prev = _ROUTING_ROW_RE.match(new_lines[idx])
+            if prev:
+                combined_need = f"{prev.group('need').strip()} & {need}"
+                combined_when = f"{prev.group('when').strip()}; {when.lower()}"
+                new_lines[idx] = (
+                    f"| {combined_need} | **{display_name}** | {combined_when} |"
+                )
+            continue
+
+        row = f"| {need} | **{display_name}** | {when} |"
+        seen_merged[display_name] = len(new_lines)
+        new_lines.append(row)
+
+    new_body = "\n".join(new_lines)
+    output_text = f"---\n{fm_text}\n---\n\n{new_body}"
+    coord_file.write_text(output_text, encoding="utf-8")
 
 
 def _merge_agent_bodies(
@@ -410,6 +509,7 @@ def _merge_agent_bodies(
     body_parts: list[str] = []
     seen_prompts: set[str] = set()
     prompt_names: list[str] = []
+    rigor_inlined = False
 
     for src_name in sources:
         src_file = agents_src / f"{src_name}.agent.md"
@@ -421,12 +521,20 @@ def _merge_agent_bodies(
         raw = _apply_replacements(raw, replacements)
         _, body = _split_frontmatter(raw)
 
-        # Inline rigor
+        # Inline rigor instructions — only the first source gets the full
+        # text; subsequent sources get a short back-reference to avoid
+        # duplicating the same ~50-line policy block.
         if rigor_text:
-            replacement_block = (
-                "### Shared Scientific Rigor Principles\n\n" + rigor_text
-            )
-            body = _RIGOR_LINK_PATTERN.sub(replacement_block, body)
+            if not rigor_inlined:
+                replacement_block = (
+                    "### Shared Scientific Rigor Principles\n\n" + rigor_text
+                )
+                body = _RIGOR_LINK_PATTERN.sub(replacement_block, body)
+                rigor_inlined = True
+            else:
+                body = _RIGOR_LINK_PATTERN.sub(
+                    "See *Shared Scientific Rigor Principles* above.", body,
+                )
 
         body = _humanize_unfilled_placeholders(body)
         body_parts.append(body.strip())
