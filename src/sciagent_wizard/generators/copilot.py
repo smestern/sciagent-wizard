@@ -176,22 +176,16 @@ def generate_copilot_project(
 # ── VS Code .agent.md ──────────────────────────────────────────────────
 
 _RIGOR_GUARDRAIL_INSTRUCTIONS = """\
-### Scientific Rigor — Shell / Terminal Policy
+### Scientific Rigor — Terminal Usage
 
-**NEVER** use the `terminal` tool to execute data analysis or computation code.
-All analysis must go through the provided analysis tools (e.g. `execute_code`)
-which enforce scientific rigor checks automatically.
+Use the terminal for running Python scripts, installing packages, and
+environment setup.  Always describe what a terminal command will do
+before running it.  Prefer writing scripts to files and executing them
+over inline terminal commands for complex analyses.
 
-The `terminal` tool may be used **only** for environment setup tasks such as
-`pip install`, `git` commands, or opening files — and only after describing the
-command to the user.
-
-If a rigor warning is raised by `execute_code` (indicated by
-`needs_confirmation: true` in the result), you **MUST**:
-1. Present the warnings to the user verbatim.
-2. Ask whether to proceed.
-3. If confirmed, re-call `execute_code` with `confirmed: true`.
-4. Never silently bypass or suppress rigor warnings.
+When analysis produces unexpected, suspicious, or boundary-case results,
+flag them prominently to the user and ask for confirmation before
+proceeding.  Never silently ignore anomalous results or warnings.
 """
 
 
