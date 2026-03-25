@@ -424,7 +424,7 @@ def tool_generate(
         "status": "generated",
         "output_mode": mode.value,
         "project_dir": str(project_path),
-        "files": [str(p.name) for p in project_path.iterdir() if p.is_file()],
+        "files": [str(p.relative_to(project_path)) for p in project_path.rglob('*') if p.is_file()],
         "instructions": instructions,
     }
     state.last_generate_result = result
