@@ -715,6 +715,15 @@
                 max-height: 150px;
             }
         }
+
+        /* ── Markdown content (tables, headings, etc.) ───────── */
+        .md-content table { border-collapse: collapse; margin: 8px 0; width: 100%; }
+        .md-content th, .md-content td { border: 1px solid var(--border-color, #444); padding: 6px 10px; text-align: left; }
+        .md-content th { background: var(--bg-tertiary, #2a2a3e); }
+        .md-content h1, .md-content h2, .md-content h3 { margin-top: 12px; margin-bottom: 6px; }
+        .md-content p { margin-bottom: 6px; }
+        .md-content ul, .md-content ol { padding-left: 24px; margin-bottom: 8px; }
+        .md-content blockquote { border-left: 3px solid #a855f7; padding-left: 12px; color: var(--text-secondary); margin: 8px 0; }
     </style>
 </head>
 <body>
@@ -1037,6 +1046,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/public/static/js/public_wizard.js"></script>
     <script>
     // Check auth status and show bar if user is signed in

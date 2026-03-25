@@ -630,7 +630,7 @@ function appendMessage(role, content) {
         div.innerHTML = `<span style="background: #a855f7; color: white; padding: 0.5rem 1rem;
             border-radius: 1rem; display: inline-block; max-width: 80%;">${escHtml(content)}</span>`;
     } else if (role === 'assistant') {
-        div.innerHTML = `<div style="background: var(--bg-secondary); padding: 0.75rem 1rem;
+        div.innerHTML = `<div class="md-content" style="background: var(--bg-secondary); padding: 0.75rem 1rem;
             border-radius: 8px; max-width: 90%;">${renderMarkdown(content)}</div>`;
     } else {
         div.innerHTML = `<div style="color: var(--text-secondary); font-size: 0.85rem;
@@ -650,37 +650,20 @@ function scrollChat() {
 // ── Utility ────────────────────────────────────────────────────────────
 
 function renderMarkdown(text) {
-    // Sanitise first (escape HTML entities already present)
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({ breaks: true, gfm: true });
+        return marked.parse(text);
+    }
+    // Fallback: basic rendering if marked.js failed to load
     let s = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-
-    // Fenced code blocks
     s = s.replace(/```(\w*)\n([\s\S]*?)```/g,
-        '<pre style="background:var(--bg-primary);padding:0.75rem;border-radius:6px;overflow-x:auto;margin:0.5rem 0;"><code>$2</code></pre>');
-    // Inline code
-    s = s.replace(/`([^`]+)`/g,
-        '<code style="background:var(--bg-primary);padding:2px 4px;border-radius:3px;">$1</code>');
-    // Bold
+        '<pre><code>$2</code></pre>');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Italic
-    s = s.replace(/(?<![\w*])\*([^*]+)\*(?![\w*])/g, '<em>$1</em>');
-    // Horizontal rule
-    s = s.replace(/^---+$/gm,
-        '<hr style="border:none;border-top:1px solid var(--border-color);margin:0.75rem 0;">');
-    // Unordered list items (- or •)
-    s = s.replace(/^[\-•]\s+(.+)$/gm, '<li style="margin:0.2rem 0;">$1</li>');
-    // Wrap consecutive <li> in <ul>
-    s = s.replace(/((?:<li[^>]*>.*?<\/li>\s*)+)/g,
-        '<ul style="margin:0.5rem 0 0.5rem 1.25rem;padding:0;list-style:disc;">$1</ul>');
-    // Numbered list items
-    s = s.replace(/^(\d+)\.\s+(.+)$/gm, '<li style="margin:0.2rem 0;">$2</li>');
-    // Newlines → <br> (but not inside <pre>)
     s = s.replace(/\n/g, '<br>');
-    // Clean up <br> immediately inside block elements
-    s = s.replace(/<br>\s*(<\/?(?:ul|ol|li|hr|pre|div))/gi, '$1');
-    s = s.replace(/(<\/?(?:ul|ol|li|hr|pre|div)[^>]*>)\s*<br>/gi, '$1');
     return s;
 }
 
