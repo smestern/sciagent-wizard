@@ -39,23 +39,29 @@ logger = logging.getLogger(__name__)
 
 # ── Script discovery ────────────────────────────────────────────────────
 
-def _find_build_script() -> Path:
-    """Locate ``scripts/build_plugin.py`` relative to the templates dir.
+def _find_build_command() -> list[str]:
+    """Return the command prefix to invoke ``build_plugin.py``.
 
     Resolution order:
-    1. ``<templates_dir>/../scripts/build_plugin.py`` — works when sciagent
-       is an editable install or templates are in the source tree.
-    2. Dev monorepo layout: ``<wizard_repo>/../../sciagent/scripts/``.
-    3. ``shutil.which("sciagent-build")`` — console_scripts entry point.
 
-    Raises ``FileNotFoundError`` if the script cannot be found.
+    1. ``<templates_dir>/../scripts/build_plugin.py`` — editable install or
+       source tree.
+    2. Dev monorepo: ``<wizard_repo>/../../sciagent/scripts/``.
+    3. ``shutil.which("sciagent-build")`` — console_scripts entry point.
+    4. ``python -m sciagent.scripts.build_plugin`` — pip-installed package.
+
+    Returns a list suitable as the prefix of a :func:`subprocess.run` call
+    (e.g. ``[sys.executable, "/path/to/build_plugin.py"]`` or
+    ``[sys.executable, "-m", "sciagent.scripts.build_plugin"]``).
+
+    Raises ``FileNotFoundError`` if none of the methods succeed.
     """
-    # 1. Relative to templates dir
+    # 1. Relative to templates dir (editable / source tree)
     try:
         templates = _get_templates_dir()
         candidate = templates.parent / "scripts" / "build_plugin.py"
         if candidate.is_file():
-            return candidate
+            return [sys.executable, str(candidate)]
     except FileNotFoundError:
         pass
 
@@ -66,16 +72,23 @@ def _find_build_script() -> Path:
     ]
     for candidate in _dev_candidates:
         if candidate.is_file():
-            return candidate
+            return [sys.executable, str(candidate)]
 
     # 3. Console scripts entry point
     which = shutil.which("sciagent-build")
     if which:
-        return Path(which)
+        return [which]
+
+    # 4. Packaged module (pip install sciagent)
+    try:
+        import sciagent.scripts.build_plugin  # noqa: F401
+        return [sys.executable, "-m", "sciagent.scripts.build_plugin"]
+    except ImportError:
+        pass
 
     raise FileNotFoundError(
         "Cannot locate build_plugin.py.  Ensure sciagent is installed "
-        "(pip install -e .) or that scripts/build_plugin.py exists."
+        "(pip install sciagent) or that scripts/build_plugin.py exists."
     )
 
 
@@ -204,7 +217,7 @@ def generate_copilot_via_build(
     Returns:
         Path to the generated plugin directory.
     """
-    build_script = _find_build_script()
+    build_cmd = _find_build_command()
     base = Path(output_dir) if output_dir else Path.cwd()
     slug = state.agent_name.replace(" ", "_").replace("-", "_")
     project_dir = base / slug
@@ -284,8 +297,7 @@ def generate_copilot_via_build(
         copilot_out = tmp / "copilot_out"
         claude_out = tmp / "claude_out"
 
-        cmd = [
-            sys.executable, str(build_script),
+        cmd = build_cmd + [
             "--output", str(copilot_out),
             "--claude-output", str(claude_out),
             "--platform", "both",

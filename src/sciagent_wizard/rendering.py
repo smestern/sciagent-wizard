@@ -103,7 +103,7 @@ _REPEAT_RE = re.compile(
 # ── Template names ──────────────────────────────────────────────────────
 
 TEMPLATE_FILES = [
-    "agents.md",
+    "AGENTS.md",
     "operations.md",
     "skills.md",
     "tools.md",
