@@ -67,11 +67,11 @@ analysis agent.
    `set_output_mode` to choose:
    - **fullstack** — Full Python submodule with CLI, web UI, code
      execution, guardrails (default)
-   - **copilot_agent** — Config files for VS Code Copilot custom agent
-     and Claude Code sub-agent
-   - **copilot_plugin** — Full VS Code Copilot plugin with plugin.json
-     manifest, compiled agents, skills as SKILL.md files, and package
-     documentation. Installable via `chat.plugins.paths`.
+   - **copilot** — VS Code Copilot plugin with plugin.json manifest,
+     compiled agents, skills as SKILL.md files, and package
+     documentation. Also includes Claude Code agents. Installable
+     via `chat.plugins.paths`. (Legacy names `copilot_agent` and
+     `copilot_plugin` are accepted as aliases.)
    - **markdown** — Platform-agnostic Markdown specification that works
      with any LLM
 
@@ -80,7 +80,7 @@ analysis agent.
 
 10. **Install & Launch** — For fullstack mode, offer to install packages
     with `install_packages` and launch the agent with `launch_agent`.
-    For copilot_agent or markdown mode, explain how to use the output.
+    For copilot or markdown mode, explain how to use the output.
 
 ### Important
 

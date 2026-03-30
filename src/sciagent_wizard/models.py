@@ -16,9 +16,12 @@ class OutputMode(str, Enum):
     """Which output format the wizard should generate."""
 
     FULLSTACK = "fullstack"          # Full Python submodule (current mode)
-    COPILOT_AGENT = "copilot_agent"  # VS Code .agent.md + Claude .md configs
-    COPILOT_PLUGIN = "copilot_plugin"  # VS Code Copilot plugin (plugin.json, agents/, skills/)
+    COPILOT = "copilot"              # VS Code Copilot plugin + Claude Code (unified)
     MARKDOWN = "markdown"            # Platform-agnostic markdown specification
+
+    # Backward-compat aliases (resolve to COPILOT)
+    COPILOT_AGENT = "copilot"
+    COPILOT_PLUGIN = "copilot"
 
 
 # Supported LLM models for wizard backend (billing selection)

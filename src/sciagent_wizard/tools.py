@@ -379,19 +379,7 @@ def tool_generate(
 
     # Build mode-specific instructions
     mode = state.output_mode
-    if mode == OutputMode.COPILOT_AGENT:
-        instructions = {
-            "vscode": (
-                f"Copy the .github/agents/ folder into your workspace "
-                f"and select '{state.agent_display_name}' from the Agents dropdown."
-            ),
-            "claude_code": (
-                f"Copy the .claude/agents/ folder into your project. "
-                f"Claude Code will auto-detect the '{state.agent_name}' sub-agent."
-            ),
-            "docs": "Package documentation is in docs/",
-        }
-    elif mode == OutputMode.COPILOT_PLUGIN:
+    if mode == OutputMode.COPILOT:
         instructions = {
             "install": (
                 f'Add to VS Code settings.json:\n'
@@ -402,6 +390,10 @@ def tool_generate(
             "usage": (
                 f"Restart VS Code, then invoke @{state.agent_name} in Copilot chat. "
                 f"Skills are available as slash commands."
+            ),
+            "claude_code": (
+                f"Claude Code agents are also included. "
+                f"Copy the .claude-plugin/ folder or use --plugin-dir."
             ),
             "docs": "Package documentation is in docs/",
         }
@@ -543,11 +535,15 @@ def tool_fetch_docs(state: WizardState) -> str:
 
 def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = False) -> str:
     """Set the output mode for agent generation."""
+    # Normalize legacy string values to the canonical "copilot"
+    _LEGACY_ALIASES = {"copilot_agent": "copilot", "copilot_plugin": "copilot"}
+    mode = _LEGACY_ALIASES.get(mode, mode)
+
     try:
         output_mode = OutputMode(mode)
     except ValueError:
         return json.dumps({
-            "error": f"Invalid mode '{mode}'. Must be one of: fullstack, copilot_agent, copilot_plugin, markdown"
+            "error": f"Invalid mode '{mode}'. Must be one of: fullstack, copilot, markdown"
         })
 
     # Enforce restriction in guided/public mode
@@ -555,7 +551,7 @@ def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = Fals
         return json.dumps({
             "error": (
                 "Fullstack mode is not available in public mode. "
-                "Please choose 'copilot_agent', 'copilot_plugin', or 'markdown'."
+                "Please choose 'copilot' or 'markdown'."
             )
         })
 
@@ -566,15 +562,10 @@ def tool_set_output_mode(state: WizardState, mode: str, guided_mode: bool = Fals
             "Full Python submodule with CLI, web UI, code execution sandbox, "
             "and guardrails. The generated agent runs as a standalone application."
         ),
-        OutputMode.COPILOT_AGENT: (
-            "Configuration files for VS Code GitHub Copilot custom agent "
-            "(.agent.md) and Claude Code sub-agent (.md). Includes shared "
-            "instructions and package documentation."
-        ),
-        OutputMode.COPILOT_PLUGIN: (
+        OutputMode.COPILOT: (
             "Full VS Code Copilot plugin with plugin.json manifest, compiled "
-            "agents with inlined expertise, skills as SKILL.md files, and "
-            "package documentation. Install via chat.plugins.paths."
+            "agents with inlined expertise, skills as SKILL.md files, Claude Code "
+            "agents, and package documentation. Install via chat.plugins.paths."
         ),
         OutputMode.MARKDOWN: (
             "Platform-agnostic Markdown files (system prompt, tools reference, "

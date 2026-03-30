@@ -74,9 +74,19 @@ The wizard generates agents in one of three formats:
 
 | Mode | CLI flag | What you get |
 |------|----------|-------------|
+| **Copilot Plugin** | `-m copilot` | VS Code Copilot plugin + Claude Code agents — `plugin.json`, compiled agents, skills, templates, docs. The recommended mode. |
 | **Fullstack** | `-m fullstack` | Complete Python submodule with CLI, web UI, sandboxed code execution, guardrails, config, tools, and domain prompt |
-| **Copilot / Claude Code** | `-m copilot_agent` | `.github/agents/{name}.agent.md` + `.claude/agents/{name}.md` + shared instructions — drops into your IDE |
 | **Markdown** | `-m markdown` | Platform-agnostic spec files (`system-prompt.md`, `tools-reference.md`, `guardrails.md`, etc.) — paste into any LLM |
+
+> Legacy flags `-m copilot_agent` and `-m copilot_plugin` are accepted as aliases for `-m copilot`.
+
+### Copilot Plugin output includes:
+
+- `.github/plugin/plugin.json` — VS Code plugin manifest
+- `agents/{name}-*.md` — Compiled agents with inlined domain expertise
+- `skills/*/SKILL.md` — Domain skills + per-package API reference
+- `.claude-plugin/plugin.json` — Claude Code plugin manifest
+- `templates/`, `docs/`, `README.md`
 
 ### Fullstack output includes:
 
@@ -85,13 +95,6 @@ The wizard generates agents in one of three formats:
 - `tools.py` — `@tool`-decorated wrappers per confirmed package
 - `domain_prompt.py` — `DOMAIN_EXPERTISE` system prompt constant
 - `requirements.txt`, `README.md`, `docs/`, `sample_data/`
-
-### Copilot / Claude Code output includes:
-
-- `.github/agents/{name}.agent.md` — VS Code Copilot custom agent (YAML frontmatter)
-- `.claude/agents/{name}.md` — Claude Code sub-agent
-- `.github/instructions/{name}.instructions.md` — Shared domain expertise
-- `docs/`, `README.md`
 
 ### Markdown output includes:
 

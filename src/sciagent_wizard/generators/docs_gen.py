@@ -1,7 +1,7 @@
 """
 docs_gen — Write package documentation files into the generated project.
 
-Shared across all three output modes (fullstack, copilot_agent, markdown).
+Shared across all three output modes (fullstack, copilot, markdown).
 Each entry in ``WizardState.package_docs`` becomes a separate ``.md`` file,
 plus an ``index.md`` that catalogues them all.
 """

@@ -24,7 +24,7 @@ from typing import Optional
 
 from sciagent_wizard.models import OutputMode, WizardState
 from .config_gen import generate_config_source
-from .copilot import generate_copilot_project
+from .copilot_adapter import generate_copilot_via_build as generate_copilot_plugin
 from .docs_gen import write_docs
 from .markdown import generate_markdown_project
 from .prompt_gen import generate_prompt_source
@@ -56,8 +56,8 @@ def generate_project(
     logger.info("Generating agent project in %s (mode=%s)", project_dir, state.output_mode)
 
     # ── Dispatch by output mode ─────────────────────────────────────
-    if state.output_mode == OutputMode.COPILOT_AGENT:
-        return generate_copilot_project(state, project_dir)
+    if state.output_mode == OutputMode.COPILOT:
+        return generate_copilot_plugin(state, project_dir)
     if state.output_mode == OutputMode.MARKDOWN:
         return generate_markdown_project(state, project_dir)
 

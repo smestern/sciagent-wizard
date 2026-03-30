@@ -177,7 +177,7 @@ def _register_cli(typer_app):
         ),
         output_mode: str = _typer.Option(
             "fullstack", "--output-mode", "-m",
-            help="Output mode: fullstack, copilot_agent, copilot_plugin, or markdown.",
+            help="Output mode: fullstack, copilot, or markdown. (Legacy: copilot_agent, copilot_plugin are aliases for copilot.)",
         ),
         rigor_level: str = _typer.Option(
             "standard", "--rigor-level", "-r",
@@ -188,12 +188,14 @@ def _register_cli(typer_app):
         from sciagent_wizard.agent import create_wizard, WIZARD_CONFIG
         from sciagent_wizard.models import OutputMode
 
+        _LEGACY = {"copilot_agent": "copilot", "copilot_plugin": "copilot"}
+        output_mode = _LEGACY.get(output_mode, output_mode)
         try:
             mode = OutputMode(output_mode)
         except ValueError:
             from rich.console import Console
             Console().print(f"[red]Invalid output mode: {output_mode}[/red]")
-            Console().print("[dim]Valid modes: fullstack, copilot_agent, copilot_plugin, markdown[/dim]")
+            Console().print("[dim]Valid modes: fullstack, copilot, markdown[/dim]")
             raise _typer.Exit(1)
 
         from sciagent.guardrails.scanner import RigorLevel
@@ -280,10 +282,12 @@ def main():
             idx = sys.argv.index(flag)
             if idx + 1 < len(sys.argv):
                 try:
-                    output_mode = OutputMode(sys.argv[idx + 1])
+                    _LEGACY = {"copilot_agent": "copilot", "copilot_plugin": "copilot"}
+                    _raw = sys.argv[idx + 1]
+                    output_mode = OutputMode(_LEGACY.get(_raw, _raw))
                 except ValueError:
                     print(f"Invalid output mode: {sys.argv[idx + 1]}")
-                    print("Valid modes: fullstack, copilot_agent, copilot_plugin, markdown")
+                    print("Valid modes: fullstack, copilot, markdown")
                     sys.exit(1)
 
     # In public mode, force non-fullstack default

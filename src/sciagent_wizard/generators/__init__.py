@@ -13,7 +13,8 @@ from typing import Optional
 from sciagent_wizard.models import OutputMode, WizardState
 
 from .fullstack import generate_project as generate_fullstack_project
-from .copilot import generate_copilot_project, generate_copilot_plugin
+from .copilot_adapter import generate_copilot_via_build as generate_copilot_plugin
+from .copilot import generate_copilot_plugin as _generate_copilot_plugin_legacy
 from .markdown import generate_markdown_project
 from .docs_gen import write_docs
 from sciagent_wizard.rendering import (
@@ -38,10 +39,7 @@ def generate_project(
     """
     mode = state.output_mode
 
-    if mode == OutputMode.COPILOT_AGENT:
-        return generate_copilot_project(state, output_dir=output_dir)
-
-    if mode == OutputMode.COPILOT_PLUGIN:
+    if mode == OutputMode.COPILOT:
         return generate_copilot_plugin(state, output_dir=output_dir)
 
     if mode == OutputMode.MARKDOWN:
@@ -54,7 +52,6 @@ def generate_project(
 __all__ = [
     "generate_project",
     "generate_fullstack_project",
-    "generate_copilot_project",
     "generate_copilot_plugin",
     "generate_markdown_project",
     "write_docs",
