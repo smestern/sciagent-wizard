@@ -182,10 +182,10 @@ Restart VS Code, then invoke `@{slug}` in Copilot chat.
 
 ### Claude Code
 
-Claude Code agents are also included.  Use:
+Claude Code agents are also included under the `.claude/` subdirectory:
 
 ```bash
-claude --plugin-dir ./{slug}
+claude --plugin-dir ./{slug}/.claude
 ```
 
 ## Agents
@@ -335,9 +335,11 @@ def generate_copilot_via_build(
         if project_dir.exists():
             shutil.rmtree(project_dir)
         shutil.copytree(copilot_out, project_dir, dirs_exist_ok=True)
-        # Layer Claude output on top (adds .claude-plugin/, may overlap
-        # agents/ and skills/ — Claude versions are separate files).
-        shutil.copytree(claude_out, project_dir, dirs_exist_ok=True)
+        # Place the entire Claude output under .claude/ so its agents/
+        # and skills/ (which use Claude-format frontmatter) don't
+        # overwrite the Copilot versions.
+        claude_dest = project_dir / ".claude"
+        shutil.copytree(claude_out, claude_dest, dirs_exist_ok=True)
 
     # ── Collect output file names for README ────────────────────────
     agents_dir = project_dir / "agents"
