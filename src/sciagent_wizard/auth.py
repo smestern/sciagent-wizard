@@ -278,8 +278,12 @@ def create_auth_blueprint() -> Blueprint:
 
     @auth_bp.route("/logout")
     async def logout():
-        """Clear the session and redirect to the public page."""
+        """Revoke the OAuth token on GitHub then clear the session."""
         return_to = request.args.get("return_to", "/public/")
+        # Revoke the token server-side before clearing the session
+        token = session.get("github_token")
+        if token:
+            await _revoke_github_token(token)
         session.clear()
         resp = redirect(return_to)
         # Explicitly delete the session cookie so the browser stops
@@ -290,6 +294,19 @@ def create_auth_blueprint() -> Blueprint:
             path=current_app.config.get("SESSION_COOKIE_PATH", "/"),
         )
         return resp
+
+    @auth_bp.route("/revoke", methods=["POST"])
+    async def revoke():
+        """Programmatic token revocation endpoint."""
+        token = session.get("github_token")
+        if not token:
+            return jsonify({
+                "revoked": False,
+                "error": "No active token.",
+            }), 400
+        revoked = await _revoke_github_token(token)
+        session.clear()
+        return jsonify({"revoked": revoked})
 
     @auth_bp.route("/status")
     async def status():
@@ -414,8 +431,52 @@ async def _validate_token_if_needed() -> bool:
         # but don't update the validation timestamp
         return True
 
+    # Revoke the invalid token on GitHub's side (best-effort)
+    await _revoke_github_token(token)
+
     # Clear invalid session
     session.clear()
+    return False
+
+
+async def _revoke_github_token(access_token: str) -> bool:
+    """Revoke a single OAuth token via GitHub's REST API.
+
+    Calls ``DELETE /applications/{client_id}/token`` with Basic Auth
+    (client_id : client_secret).  Returns ``True`` when the token was
+    successfully revoked (HTTP 204) or was already invalid (HTTP 422).
+    Returns ``False`` on network errors or unexpected responses — the
+    failure is logged but never raised so callers always complete.
+    """
+    client_id = os.environ.get(_GITHUB_OAUTH_CLIENT_ID)
+    client_secret = os.environ.get(_GITHUB_OAUTH_CLIENT_SECRET)
+    if not client_id or not client_secret or not access_token:
+        return False
+
+    import httpx  # lazy import
+
+    url = f"https://api.github.com/applications/{client_id}/token"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.request(
+                "DELETE",
+                url,
+                auth=(client_id, client_secret),
+                json={"access_token": access_token},
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+        if resp.status_code in (204, 422):
+            logger.info("GitHub token revoked (HTTP %d)", resp.status_code)
+            return True
+        logger.warning(
+            "Unexpected response from GitHub token revocation: HTTP %d",
+            resp.status_code,
+        )
+    except Exception as exc:
+        logger.warning("GitHub token revocation failed: %s", exc)
     return False
 
 
